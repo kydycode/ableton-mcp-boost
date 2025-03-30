@@ -1,4 +1,4 @@
-# AbletonMCP - Ableton Live Model Context Protocol Integration
+# AbletonMC-boost - Ableton Live Model Context Protocol Integration
 [![smithery badge](https://smithery.ai/badge/@kydycode/ableton-mcp-boost)](https://smithery.ai/server/@kydycode/ableton-mcp-boost)
 
 AbletonMCP connects Ableton Live to Claude AI through the Model Context Protocol (MCP), allowing Claude to directly interact with and control Ableton Live. This integration enables prompt-assisted music production, track creation, and Live session manipulation.
@@ -59,10 +59,10 @@ Otherwise, install from [uv's official website][https://docs.astral.sh/uv/gettin
 ```json
 {
     "mcpServers": {
-        "AbletonMCP": {
+        "AbletonMCP-boost": {
             "command": "uvx",
             "args": [
-                "ableton-mcp"
+                "ableton-mcp-boost"
             ]
         }
     }
@@ -71,10 +71,10 @@ Otherwise, install from [uv's official website][https://docs.astral.sh/uv/gettin
 
 ### Cursor Integration
 
-Run ableton-mcp without installing it permanently through uvx. Go to Cursor Settings > MCP and paste this as a command:
+Run ableton-mcp-boost without installing it permanently through uvx. Go to Cursor Settings > MCP and paste this as a command:
 
 ```
-uvx ableton-mcp
+uvx ableton-mcp-boost
 ```
 
 ⚠️ Only run one instance of the MCP server (either on Cursor or Claude Desktop), not both
