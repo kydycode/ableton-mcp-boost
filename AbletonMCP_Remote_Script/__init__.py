@@ -7,6 +7,7 @@ import json
 import threading
 import time
 import traceback
+import random
 
 # Change queue import for Python 2
 try:
@@ -229,7 +230,9 @@ class AbletonMCP(ControlSurface):
             elif command_type in ["create_midi_track", "set_track_name", 
                                  "create_clip", "add_notes_to_clip", "set_clip_name", 
                                  "set_tempo", "fire_clip", "stop_clip",
-                                 "start_playback", "stop_playback", "load_browser_item"]:
+                                 "start_playback", "stop_playback", "load_browser_item",
+                                 "create_arrangement_section", "duplicate_section", 
+                                 "create_transition", "convert_session_to_arrangement"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
                 
@@ -282,6 +285,26 @@ class AbletonMCP(ControlSurface):
                             track_index = params.get("track_index", 0)
                             item_uri = params.get("item_uri", "")
                             result = self._load_browser_item(track_index, item_uri)
+                        elif command_type == "create_arrangement_section":
+                            section_type = params.get("section_type", "")
+                            length_bars = params.get("length_bars", 4)
+                            start_bar = params.get("start_bar", -1)
+                            result = self._create_arrangement_section(section_type, length_bars, start_bar)
+                        elif command_type == "duplicate_section":
+                            source_start_bar = params.get("source_start_bar", 0)
+                            source_end_bar = params.get("source_end_bar", 4)
+                            destination_bar = params.get("destination_bar", 4)
+                            variation_level = params.get("variation_level", 0.0)
+                            result = self._duplicate_section(source_start_bar, source_end_bar, destination_bar, variation_level)
+                        elif command_type == "create_transition":
+                            from_bar = params.get("from_bar", 0)
+                            to_bar = params.get("to_bar", 0)
+                            transition_type = params.get("transition_type", "fill")
+                            length_beats = params.get("length_beats", 4)
+                            result = self._create_transition(from_bar, to_bar, transition_type, length_beats)
+                        elif command_type == "convert_session_to_arrangement":
+                            structure = params.get("structure", [])
+                            result = self._convert_session_to_arrangement(structure)
                         
                         # Put the result in the queue
                         response_queue.put({"status": "success", "result": result})
@@ -1058,5 +1081,439 @@ class AbletonMCP(ControlSurface):
             
         except Exception as e:
             self.log_message("Error getting browser items at path: {0}".format(str(e)))
+            self.log_message(traceback.format_exc())
+            raise
+
+    def _create_arrangement_section(self, section_type, length_bars, start_bar):
+        """Create a section in the arrangement (intro, verse, chorus, etc.)"""
+        try:
+            self.log_message(f"Creating {section_type} section with length {length_bars} bars")
+            
+            # If start_bar is -1, we add to the end of the arrangement
+            if start_bar == -1:
+                # Get the end time of the arrangement by finding the latest clip/automation end time
+                end_time = 0
+                for track in self._song.tracks:
+                    for clip in track.arrangement_clips:
+                        end_time = max(end_time, clip.end_time)
+                
+                # Convert to bars (assuming 4/4 time signature)
+                beats_per_bar = 4  # Standard 4/4 time signature
+                end_bar = int(end_time / beats_per_bar)
+                start_bar = end_bar
+            
+            # Convert bars to time
+            beats_per_bar = 4
+            start_time = start_bar * beats_per_bar
+            
+            # Make this a bit more interesting by selecting appropriate clips to include based on section type
+            section_tracks = {}
+            
+            # Different clip selection strategies based on section type
+            if section_type.lower() == "intro":
+                # For intro, focus on simpler elements
+                section_tracks = self._select_clips_for_section("intro")
+            elif section_type.lower() == "verse":
+                section_tracks = self._select_clips_for_section("verse")
+            elif section_type.lower() == "chorus":
+                section_tracks = self._select_clips_for_section("chorus")
+            elif section_type.lower() == "bridge":
+                section_tracks = self._select_clips_for_section("bridge")
+            elif section_type.lower() == "outro":
+                section_tracks = self._select_clips_for_section("outro")
+            else:
+                # For unrecognized sections, just use all tracks
+                section_tracks = self._select_clips_for_section("generic")
+            
+            # Now create clips in the arrangement for each track
+            for track_index, clip_indices in section_tracks.items():
+                if track_index >= len(self._song.tracks):
+                    continue
+                
+                track = self._song.tracks[track_index]
+                
+                for clip_index in clip_indices:
+                    if clip_index >= len(track.clip_slots) or not track.clip_slots[clip_index].has_clip:
+                        continue
+                    
+                    clip_slot = track.clip_slots[clip_index]
+                    source_clip = clip_slot.clip
+                    
+                    # Calculate how many times to loop this clip to fill the section
+                    section_length = length_bars * beats_per_bar
+                    clip_repeats = int(section_length / source_clip.length) + 1  # +1 to ensure we fill the section
+                    
+                    # For each repeat, create a copy of the clip in the arrangement
+                    for i in range(clip_repeats):
+                        # Calculate position for this repetition
+                        rep_start_time = start_time + (i * source_clip.length)
+                        
+                        # If this repetition would extend past the section, skip it
+                        if rep_start_time >= start_time + section_length:
+                            break
+                        
+                        # Add to arrangement at the calculated position
+                        source_clip.duplicate_clip_to(track, rep_start_time)
+            
+            result = {
+                "section_type": section_type,
+                "start_position": start_bar,
+                "length_bars": length_bars
+            }
+            return result
+            
+        except Exception as e:
+            self.log_message(f"Error creating arrangement section: {str(e)}")
+            self.log_message(traceback.format_exc())
+            raise
+
+    def _select_clips_for_section(self, section_type):
+        """Helper function to select appropriate clips for a section type"""
+        tracks = {}
+        
+        # For now, implement a simple strategy based on section type
+        if section_type == "intro":
+            # For intro, use fewer tracks, focus on foundational elements
+            drum_track_found = False
+            bass_track_found = False
+            
+            for i, track in enumerate(self._song.tracks):
+                # Simple heuristic to find drum and bass tracks based on name
+                if not drum_track_found and "drum" in track.name.lower():
+                    # For drums, choose a clip that appears to be a basic pattern
+                    clips = [j for j, slot in enumerate(track.clip_slots) if slot.has_clip]
+                    if clips:
+                        tracks[i] = [clips[0]]  # Just use the first clip for simplicity
+                        drum_track_found = True
+                
+                elif not bass_track_found and "bass" in track.name.lower():
+                    # For bass, choose a clip that appears to be a basic pattern
+                    clips = [j for j, slot in enumerate(track.clip_slots) if slot.has_clip]
+                    if clips:
+                        tracks[i] = [clips[0]]  # Just use the first clip for simplicity
+                        bass_track_found = True
+        
+        elif section_type == "chorus":
+            # For chorus, use most available tracks for a fuller sound
+            for i, track in enumerate(self._song.tracks):
+                clips = [j for j, slot in enumerate(track.clip_slots) if slot.has_clip]
+                if clips:
+                    # Try to find clips that appear to be more energetic
+                    # (in real implementation, this would use more sophisticated analysis)
+                    tracks[i] = [clips[-1] if len(clips) > 1 else clips[0]]
+        
+        else:
+            # Default strategy: use any available clips
+            for i, track in enumerate(self._song.tracks):
+                clips = [j for j, slot in enumerate(track.clip_slots) if slot.has_clip]
+                if clips:
+                    tracks[i] = [clips[0]]  # Just use the first clip for simplicity
+        
+        return tracks
+
+    def _duplicate_section(self, source_start_bar, source_end_bar, destination_bar, variation_level):
+        """Duplicate a section of the arrangement with optional variations"""
+        try:
+            self.log_message(f"Duplicating section from bar {source_start_bar} to {source_end_bar}")
+            
+            # Convert bars to time
+            beats_per_bar = 4  # Standard 4/4 time signature
+            source_start_time = source_start_bar * beats_per_bar
+            source_end_time = source_end_bar * beats_per_bar
+            destination_time = destination_bar * beats_per_bar
+            
+            # Get all clips in the source range
+            section_length = source_end_time - source_start_time
+            
+            # For each track, find clips in the source range and duplicate them
+            for track in self._song.tracks:
+                # Get clips that overlap with the source range
+                for clip in track.arrangement_clips:
+                    # Check if clip overlaps with source range
+                    if clip.start_time < source_end_time and clip.end_time > source_start_time:
+                        # Calculate clip position relative to section start
+                        clip_rel_start = max(0, clip.start_time - source_start_time)
+                        
+                        # Calculate new start time in destination
+                        new_start_time = destination_time + clip_rel_start
+                        
+                        # Duplicate the clip to the new position
+                        clip.duplicate_clip_to(track, new_start_time)
+                        
+                        # If variation level > 0, apply variations to the new clip
+                        if variation_level > 0:
+                            # Find the newly created clip - it should be the last one added
+                            new_clip = None
+                            for c in track.arrangement_clips:
+                                if c.start_time == new_start_time:
+                                    new_clip = c
+                                    break
+                            
+                            if new_clip and new_clip.is_midi_clip:
+                                self._apply_variations(new_clip, variation_level)
+            
+            result = {
+                "source_start_bar": source_start_bar,
+                "source_end_bar": source_end_bar,
+                "destination_bar": destination_bar,
+                "variation_level": variation_level
+            }
+            return result
+            
+        except Exception as e:
+            self.log_message(f"Error duplicating section: {str(e)}")
+            self.log_message(traceback.format_exc())
+            raise
+
+    def _apply_variations(self, clip, variation_level):
+        """Apply variations to a MIDI clip based on variation level"""
+        try:
+            if not clip.is_midi_clip:
+                return
+            
+            # Get the notes from the clip
+            notes = list(clip.get_notes(0, 0, clip.length, 127))
+            
+            # Skip if no notes
+            if not notes:
+                return
+            
+            # Apply variations based on level
+            if variation_level > 0.8:
+                # High variation: significantly change pattern
+                new_notes = []
+                for note in notes:
+                    # Keep some notes, modify others, add new ones
+                    if random.random() > 0.3:  # Keep 70% of original notes
+                        # Possibly modify pitch
+                        pitch = note[0]
+                        if random.random() < 0.4:  # 40% chance to change pitch
+                            pitch = max(0, min(127, pitch + random.choice([-2, -1, 1, 2])))
+                        
+                        # Possibly modify timing
+                        start = note[1]
+                        if random.random() < 0.3:  # 30% chance to shift timing
+                            start = max(0, min(clip.length, start + random.uniform(-0.125, 0.125)))
+                        
+                        new_notes.append((pitch, start, note[2], note[3], note[4]))
+                    
+                    # 20% chance to add a new note
+                    if random.random() < 0.2:
+                        # Create a new note based on this one
+                        pitch = max(0, min(127, note[0] + random.choice([-12, -7, -5, 0, 5, 7, 12])))
+                        start = max(0, min(clip.length, note[1] + random.uniform(-0.25, 0.25)))
+                        duration = note[2]
+                        velocity = note[3]
+                        new_notes.append((pitch, start, duration, velocity, False))
+                
+                # Replace notes
+                clip.set_notes(tuple(new_notes))
+                
+            elif variation_level > 0.5:
+                # Medium variation: modify some notes, keep structure
+                new_notes = []
+                for note in notes:
+                    # 80% chance to keep note, 20% to modify
+                    if random.random() < 0.8:
+                        new_notes.append(note)
+                    else:
+                        # Modify pitch
+                        pitch = max(0, min(127, note[0] + random.choice([-1, 1])))
+                        
+                        # Modify timing slightly
+                        start = max(0, min(clip.length, note[1] + random.uniform(-0.05, 0.05)))
+                        
+                        new_notes.append((pitch, start, note[2], note[3], note[4]))
+                
+                # Replace notes
+                clip.set_notes(tuple(new_notes))
+                
+            elif variation_level > 0.2:
+                # Low variation: subtle changes
+                new_notes = []
+                for note in notes:
+                    # 90% chance to keep the same, 10% to modify velocity
+                    if random.random() < 0.9:
+                        new_notes.append(note)
+                    else:
+                        # Modify velocity slightly
+                        velocity = max(1, min(127, int(note[3] + random.uniform(-10, 10))))
+                        
+                        new_notes.append((note[0], note[1], note[2], velocity, note[4]))
+                
+                # Replace notes
+                clip.set_notes(tuple(new_notes))
+                
+        except Exception as e:
+            self.log_message(f"Error applying variations: {str(e)}")
+    
+    def _create_transition(self, from_bar, to_bar, transition_type, length_beats):
+        """Create a transition between two sections"""
+        try:
+            self.log_message(f"Creating {transition_type} transition from bar {from_bar} to bar {to_bar}")
+            
+            # Convert bars to time
+            beats_per_bar = 4  # Standard 4/4 time signature
+            from_time = from_bar * beats_per_bar
+            to_time = to_bar * beats_per_bar
+            
+            # Find a suitable track for the transition
+            # Transitions typically involve drums and/or effects
+            drum_track = None
+            for i, track in enumerate(self._song.tracks):
+                if "drum" in track.name.lower():
+                    drum_track = track
+                    break
+            
+            # If no drum track was found, use the first track
+            if drum_track is None and len(self._song.tracks) > 0:
+                drum_track = self._song.tracks[0]
+            
+            # No tracks available
+            if drum_track is None:
+                raise Exception("No tracks available for creating transition")
+            
+            # Create transition based on type
+            if transition_type.lower() == "fill":
+                # Create a drum fill at the end of the section
+                fill_start_time = to_time - (length_beats * 0.25)  # Start a bit before the target bar
+                
+                # Find a clip to use as template for the fill
+                template_clip = None
+                for slot in drum_track.clip_slots:
+                    if slot.has_clip:
+                        template_clip = slot.clip
+                        break
+                
+                if template_clip and template_clip.is_midi_clip:
+                    # Create new clip in arrangement
+                    new_clip = drum_track.create_clip(fill_start_time, length_beats * 0.25)
+                    
+                    # Copy notes from template
+                    template_notes = list(template_clip.get_notes(0, 0, template_clip.length, 127))
+                    
+                    # Modify notes to create a fill pattern (more dense at the end)
+                    fill_notes = []
+                    for i, note in enumerate(template_notes):
+                        # Keep original pitch but adjust timing to create a fill pattern
+                        pitch = note[0]
+                        
+                        # Create a pattern with increasing density
+                        new_time = (i % 4) * 0.125
+                        duration = 0.125  # Sixteenth note
+                        
+                        # Higher velocity for accents
+                        velocity = 100 if i % 4 == 0 else 80
+                        
+                        fill_notes.append((pitch, new_time, duration, velocity, False))
+                    
+                    # Add extra notes at end of fill for buildup
+                    for i in range(4):
+                        pitch = 38  # Snare drum
+                        new_time = length_beats * 0.25 - 0.25 + (i * 0.0625)  # Last quarter note
+                        duration = 0.0625  # Thirty-second note
+                        velocity = 100 + (i * 10)  # Increasing velocity
+                        
+                        fill_notes.append((pitch, new_time, duration, velocity, False))
+                    
+                    # Set notes in the new clip
+                    new_clip.set_notes(tuple(fill_notes))
+            
+            elif transition_type.lower() in ["riser", "uplifter"]:
+                # Create a riser effect before the target bar
+                riser_start_time = to_time - length_beats
+                
+                # Look for an effect track
+                effect_track = None
+                for track in self._song.tracks:
+                    if "fx" in track.name.lower() or "effect" in track.name.lower():
+                        effect_track = track
+                        break
+                
+                # If no effect track, use the drum track
+                if effect_track is None:
+                    effect_track = drum_track
+                
+                # Create automation for a parameter (e.g., filter cutoff)
+                # This is a simplified implementation - in a real scenario, you'd
+                # find a device and automate specific parameters
+                for device in effect_track.devices:
+                    # Find a filterable parameter to automate
+                    for parameter in device.parameters:
+                        if "cutoff" in parameter.name.lower() or "freq" in parameter.name.lower():
+                            # Create automation that rises from min to max
+                            parameter.automation_state = 1  # Enable automation
+                            parameter.add_automation_point(riser_start_time, parameter.min)
+                            parameter.add_automation_point(to_time, parameter.max)
+                            break
+            
+            elif transition_type.lower() == "cut":
+                # Simple cut - stop all clips just before the target bar
+                cut_time = to_time - 0.01
+                for track in self._song.tracks:
+                    for clip in track.arrangement_clips:
+                        if clip.start_time < to_time and clip.end_time > cut_time:
+                            # Trim the clip end to create a cut
+                            clip.end_time = cut_time
+            
+            result = {
+                "transition_type": transition_type,
+                "from_bar": from_bar,
+                "to_bar": to_bar,
+                "length_beats": length_beats
+            }
+            return result
+            
+        except Exception as e:
+            self.log_message(f"Error creating transition: {str(e)}")
+            self.log_message(traceback.format_exc())
+            raise
+    
+    def _convert_session_to_arrangement(self, structure):
+        """Convert session clips to arrangement based on a specified structure"""
+        try:
+            self.log_message(f"Converting session to arrangement with structure: {structure}")
+            
+            # Clear the arrangement view first
+            self._song.clear_arrangement()
+            
+            current_bar = 0
+            
+            # Process each section in the structure
+            for section in structure:
+                section_type = section.get("type", "generic")
+                length_bars = section.get("length_bars", 4)
+                
+                # Create a section at the current position
+                self._create_arrangement_section(section_type, length_bars, current_bar)
+                
+                # If more than one section, create a transition between them
+                if current_bar > 0:
+                    # Choose transition type based on what sections are being connected
+                    transition_type = "fill"  # Default
+                    
+                    # Update transition type based on the sections being connected
+                    prev_section_type = structure[structure.index(section) - 1].get("type", "generic")
+                    if prev_section_type == "verse" and section_type == "chorus":
+                        transition_type = "riser"
+                    elif prev_section_type == "chorus" and section_type == "verse":
+                        transition_type = "downlifter"
+                    elif prev_section_type == "chorus" and section_type == "bridge":
+                        transition_type = "cut"
+                    
+                    # Create the transition
+                    self._create_transition(current_bar - 1, current_bar, transition_type, 4)
+                
+                # Move to the next position
+                current_bar += length_bars
+            
+            result = {
+                "total_length_bars": current_bar,
+                "section_count": len(structure)
+            }
+            return result
+            
+        except Exception as e:
+            self.log_message(f"Error converting session to arrangement: {str(e)}")
             self.log_message(traceback.format_exc())
             raise

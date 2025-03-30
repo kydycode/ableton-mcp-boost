@@ -652,6 +652,97 @@ def load_drum_kit(ctx: Context, track_index: int, rack_uri: str, kit_path: str) 
         logger.error(f"Error loading drum kit: {str(e)}")
         return f"Error loading drum kit: {str(e)}"
 
+# Arrangement Tools
+
+@mcp.tool()
+def create_arrangement_section(ctx: Context, section_type: str, length_bars: int, start_bar: int = -1) -> str:
+    """
+    Create a section in the arrangement (intro, verse, chorus, etc.) by duplicating clips into the arrangement view.
+    
+    Parameters:
+    - section_type: Type of section to create (e.g. 'intro', 'verse', 'chorus', 'bridge', 'outro')
+    - length_bars: Length of the section in bars
+    - start_bar: Bar position to start the section (default: end of arrangement)
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("create_arrangement_section", {
+            "section_type": section_type,
+            "length_bars": length_bars,
+            "start_bar": start_bar
+        })
+        return f"Created {section_type} section with length {length_bars} bars at position {result.get('start_position', 'unknown')}"
+    except Exception as e:
+        logger.error(f"Error creating arrangement section: {str(e)}")
+        return f"Error creating arrangement section: {str(e)}"
+
+@mcp.tool()
+def duplicate_section(ctx: Context, source_start_bar: int, source_end_bar: int, destination_bar: int, variation_level: float = 0.0) -> str:
+    """
+    Duplicate a section of the arrangement with optional variations.
+    
+    Parameters:
+    - source_start_bar: Start bar of the section to duplicate
+    - source_end_bar: End bar of the section to duplicate
+    - destination_bar: Bar position to paste the duplicated section
+    - variation_level: Amount of variation to apply (0.0 = exact copy, 1.0 = maximum variation)
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("duplicate_section", {
+            "source_start_bar": source_start_bar,
+            "source_end_bar": source_end_bar,
+            "destination_bar": destination_bar,
+            "variation_level": variation_level
+        })
+        return f"Duplicated section from bar {source_start_bar} to {source_end_bar}, inserted at bar {destination_bar}"
+    except Exception as e:
+        logger.error(f"Error duplicating section: {str(e)}")
+        return f"Error duplicating section: {str(e)}"
+
+@mcp.tool()
+def create_transition(ctx: Context, from_bar: int, to_bar: int, transition_type: str, length_beats: int = 4) -> str:
+    """
+    Create a transition between two sections in the arrangement.
+    
+    Parameters:
+    - from_bar: Bar position where the transition starts
+    - to_bar: Bar position where the transition ends
+    - transition_type: Type of transition to create ('fill', 'riser', 'impact', 'downlifter', 'uplifter', 'cut')
+    - length_beats: Length of the transition in beats
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("create_transition", {
+            "from_bar": from_bar,
+            "to_bar": to_bar,
+            "transition_type": transition_type,
+            "length_beats": length_beats
+        })
+        return f"Created {transition_type} transition from bar {from_bar} to {to_bar}"
+    except Exception as e:
+        logger.error(f"Error creating transition: {str(e)}")
+        return f"Error creating transition: {str(e)}"
+
+@mcp.tool()
+def convert_session_to_arrangement(ctx: Context, structure: List[Dict[str, Union[str, int]]]) -> str:
+    """
+    Convert session clips to arrangement based on specified structure.
+    
+    Parameters:
+    - structure: List of sections to create, each with a type, length and optional track selection
+                 Example: [{"type": "intro", "length_bars": 8}, {"type": "verse", "length_bars": 16}]
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("convert_session_to_arrangement", {
+            "structure": structure
+        })
+        return f"Created arrangement with {len(structure)} sections. Total length: {result.get('total_length_bars', 0)} bars"
+    except Exception as e:
+        logger.error(f"Error converting session to arrangement: {str(e)}")
+        return f"Error converting session to arrangement: {str(e)}"
+
 # Main execution
 def main():
     """Run the MCP server"""
