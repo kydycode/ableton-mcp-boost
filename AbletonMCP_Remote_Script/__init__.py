@@ -232,7 +232,9 @@ class AbletonMCP(ControlSurface):
                                  "set_tempo", "fire_clip", "stop_clip",
                                  "start_playback", "stop_playback", "load_browser_item",
                                  "create_arrangement_section", "duplicate_section", 
-                                 "create_transition", "convert_session_to_arrangement"]:
+                                 "create_transition", "convert_session_to_arrangement",
+                                 "set_clip_follow_action_time", "set_clip_follow_action",
+                                 "set_clip_follow_action_linked"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
                 
@@ -305,6 +307,22 @@ class AbletonMCP(ControlSurface):
                         elif command_type == "convert_session_to_arrangement":
                             structure = params.get("structure", [])
                             result = self._convert_session_to_arrangement(structure)
+                        elif command_type == "set_clip_follow_action_time":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            time_beats = params.get("time_beats", 4.0)
+                            result = self._set_clip_follow_action_time(track_index, clip_index, time_beats)
+                        elif command_type == "set_clip_follow_action":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            action_type = params.get("action_type", "next")
+                            probability = params.get("probability", 1.0)
+                            result = self._set_clip_follow_action(track_index, clip_index, action_type, probability)
+                        elif command_type == "set_clip_follow_action_linked":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            linked = params.get("linked", True)
+                            result = self._set_clip_follow_action_linked(track_index, clip_index, linked)
                         
                         # Put the result in the queue
                         response_queue.put({"status": "success", "result": result})
@@ -1516,4 +1534,124 @@ class AbletonMCP(ControlSurface):
         except Exception as e:
             self.log_message(f"Error converting session to arrangement: {str(e)}")
             self.log_message(traceback.format_exc())
+            raise
+
+    def _set_clip_follow_action_time(self, track_index, clip_index, time_beats):
+        """Set the follow action time for a clip in beats"""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            
+            track = self._song.tracks[track_index]
+            
+            if clip_index < 0 or clip_index >= len(track.clip_slots):
+                raise IndexError("Clip index out of range")
+            
+            clip_slot = track.clip_slots[clip_index]
+            
+            if not clip_slot.has_clip:
+                raise Exception("No clip in slot")
+            
+            # Set the follow action time
+            clip_slot.clip.follow_action_time = time_beats
+            
+            result = {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "follow_action_time": clip_slot.clip.follow_action_time
+            }
+            return result
+        except Exception as e:
+            self.log_message(f"Error setting clip follow action time: {str(e)}")
+            raise
+    
+    def _set_clip_follow_action(self, track_index, clip_index, action_type, probability):
+        """Set the follow action for a clip"""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            
+            track = self._song.tracks[track_index]
+            
+            if clip_index < 0 or clip_index >= len(track.clip_slots):
+                raise IndexError("Clip index out of range")
+            
+            clip_slot = track.clip_slots[clip_index]
+            
+            if not clip_slot.has_clip:
+                raise Exception("No clip in slot")
+            
+            clip = clip_slot.clip
+            
+            # Map action_type string to the appropriate value
+            # Common follow actions: "none", "next", "prev", "first", "last", "any", "other"
+            action_map = {
+                "none": 0,
+                "next": 1,
+                "prev": 2,
+                "first": 3,
+                "last": 4,
+                "any": 5,
+                "other": 6
+            }
+            
+            # Set default to "none" if not recognized
+            action_value = action_map.get(action_type.lower(), 0)
+            
+            # Validate probability (0.0 to 1.0)
+            probability = max(0.0, min(1.0, probability))
+            
+            # For action A (primary action)
+            clip.follow_action_a = action_value
+            clip.follow_action_a_probability = probability
+            
+            # For action B (secondary action) - set to none with remaining probability
+            # When A has 100% probability, B is never used
+            clip.follow_action_b = 0  # None
+            clip.follow_action_b_probability = 1.0 - probability
+            
+            # Enable follow actions
+            clip.follow_action_enabled = True
+            
+            result = {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "action_type": action_type,
+                "probability": probability,
+                "follow_action_enabled": clip.follow_action_enabled
+            }
+            return result
+        except Exception as e:
+            self.log_message(f"Error setting clip follow action: {str(e)}")
+            raise
+    
+    def _set_clip_follow_action_linked(self, track_index, clip_index, linked):
+        """Set whether the follow action timing is linked to the clip length"""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            
+            track = self._song.tracks[track_index]
+            
+            if clip_index < 0 or clip_index >= len(track.clip_slots):
+                raise IndexError("Clip index out of range")
+            
+            clip_slot = track.clip_slots[clip_index]
+            
+            if not clip_slot.has_clip:
+                raise Exception("No clip in slot")
+            
+            clip = clip_slot.clip
+            
+            # Set the follow action linked state
+            clip.follow_action_follow_time_linked = linked
+            
+            result = {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "linked": clip.follow_action_follow_time_linked
+            }
+            return result
+        except Exception as e:
+            self.log_message(f"Error setting clip follow action linked: {str(e)}")
             raise
