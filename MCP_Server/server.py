@@ -500,6 +500,101 @@ def stop_playback(ctx: Context) -> str:
         return f"Error stopping playback: {str(e)}"
 
 @mcp.tool()
+def setup_project_follow_actions(ctx: Context, loop_back: bool = True) -> str:
+    """
+    Setup follow actions for all tracks in the project.
+    This sets all clips to play in sequence (top to bottom) on each track.
+    
+    Parameters:
+    - loop_back: Whether the last clip should loop back to the first clip in each track (default: True)
+    """
+    try:
+        ableton = get_ableton_connection()
+        
+        # Get session info to determine number of tracks
+        session_info = ableton.send_command("get_session_info")
+        track_count = session_info.get("track_count", 0)
+        
+        if track_count == 0:
+            return "No tracks found in the project"
+        
+        total_clips_processed = 0
+        tracks_processed = 0
+        
+        # Process each track
+        for track_index in range(track_count):
+            try:
+                track_info = ableton.send_command("get_track_info", {"track_index": track_index})
+                clip_slots = track_info.get("clip_slots", [])
+                
+                # Find clips in this track
+                clips_with_content = []
+                for i, slot in enumerate(clip_slots):
+                    if slot.get("has_clip", False):
+                        clips_with_content.append(i)
+                
+                if not clips_with_content:
+                    logger.info(f"No clips found in track {track_index}, skipping")
+                    continue
+                
+                # Process clips in sequence
+                clips_processed = 0
+                for i, clip_index in enumerate(clips_with_content):
+                    try:
+                        # Get clip info
+                        clip_info = clip_slots[clip_index].get("clip", {})
+                        
+                        # Set follow action to "next" with 100% probability
+                        action_type = "next"
+                        
+                        # If this is the last clip and loop_back is True, set action to go back to first clip
+                        if i == len(clips_with_content) - 1 and loop_back:
+                            if clips_with_content[0] == 0:
+                                action_type = "first"
+                            else:
+                                action_type = "other"  # Would need to set specific clip index for "other"
+                        
+                        ableton.send_command("set_clip_follow_action", {
+                            "track_index": track_index,
+                            "clip_index": clip_index,
+                            "action_type": action_type,
+                            "probability": 1.0
+                        })
+                        
+                        # Set follow action time to match clip length and link it
+                        ableton.send_command("set_clip_follow_action_time", {
+                            "track_index": track_index,
+                            "clip_index": clip_index,
+                            "time_beats": clip_info.get("length", 4.0)
+                        })
+                        
+                        ableton.send_command("set_clip_follow_action_linked", {
+                            "track_index": track_index,
+                            "clip_index": clip_index,
+                            "linked": True
+                        })
+                        
+                        clips_processed += 1
+                        
+                    except Exception as e:
+                        logger.error(f"Error setting up follow action for track {track_index}, clip {clip_index}: {str(e)}")
+                        # Continue with next clip
+                
+                if clips_processed > 0:
+                    tracks_processed += 1
+                    total_clips_processed += clips_processed
+                    logger.info(f"Processed {clips_processed} clips in track {track_index}")
+                
+            except Exception as e:
+                logger.error(f"Error processing track {track_index}: {str(e)}")
+                # Continue with next track
+        
+        return f"Set up follow actions for {total_clips_processed} clips across {tracks_processed} tracks"
+    except Exception as e:
+        logger.error(f"Error setting up project follow actions: {str(e)}")
+        return f"Error setting up project follow actions: {str(e)}"
+
+@mcp.tool()
 def get_browser_tree(ctx: Context, category_type: str = "all") -> str:
     """
     Get a hierarchical tree of browser categories from Ableton.
@@ -893,101 +988,6 @@ def setup_clip_sequence(ctx: Context, track_index: int, start_clip_index: int, e
     except Exception as e:
         logger.error(f"Error setting up clip sequence: {str(e)}")
         return f"Error setting up clip sequence: {str(e)}"
-
-@mcp.tool()
-def setup_project_follow_actions(ctx: Context, loop_back: bool = True) -> str:
-    """
-    Setup follow actions for all tracks in the project.
-    This sets all clips to play in sequence (top to bottom) on each track.
-    
-    Parameters:
-    - loop_back: Whether the last clip should loop back to the first clip in each track (default: True)
-    """
-    try:
-        ableton = get_ableton_connection()
-        
-        # Get session info to determine number of tracks
-        session_info = ableton.send_command("get_session_info")
-        track_count = session_info.get("track_count", 0)
-        
-        if track_count == 0:
-            return "No tracks found in the project"
-        
-        total_clips_processed = 0
-        tracks_processed = 0
-        
-        # Process each track
-        for track_index in range(track_count):
-            try:
-                track_info = ableton.send_command("get_track_info", {"track_index": track_index})
-                clip_slots = track_info.get("clip_slots", [])
-                
-                # Find clips in this track
-                clips_with_content = []
-                for i, slot in enumerate(clip_slots):
-                    if slot.get("has_clip", False):
-                        clips_with_content.append(i)
-                
-                if not clips_with_content:
-                    logger.info(f"No clips found in track {track_index}, skipping")
-                    continue
-                
-                # Process clips in sequence
-                clips_processed = 0
-                for i, clip_index in enumerate(clips_with_content):
-                    try:
-                        # Get clip info
-                        clip_info = clip_slots[clip_index].get("clip", {})
-                        
-                        # Set follow action to "next" with 100% probability
-                        action_type = "next"
-                        
-                        # If this is the last clip and loop_back is True, set action to go back to first clip
-                        if i == len(clips_with_content) - 1 and loop_back:
-                            if clips_with_content[0] == 0:
-                                action_type = "first"
-                            else:
-                                action_type = "other"  # Would need to set specific clip index for "other"
-                        
-                        ableton.send_command("set_clip_follow_action", {
-                            "track_index": track_index,
-                            "clip_index": clip_index,
-                            "action_type": action_type,
-                            "probability": 1.0
-                        })
-                        
-                        # Set follow action time to match clip length and link it
-                        ableton.send_command("set_clip_follow_action_time", {
-                            "track_index": track_index,
-                            "clip_index": clip_index,
-                            "time_beats": clip_info.get("length", 4.0)
-                        })
-                        
-                        ableton.send_command("set_clip_follow_action_linked", {
-                            "track_index": track_index,
-                            "clip_index": clip_index,
-                            "linked": True
-                        })
-                        
-                        clips_processed += 1
-                        
-                    except Exception as e:
-                        logger.error(f"Error setting up follow action for track {track_index}, clip {clip_index}: {str(e)}")
-                        # Continue with next clip
-                
-                if clips_processed > 0:
-                    tracks_processed += 1
-                    total_clips_processed += clips_processed
-                    logger.info(f"Processed {clips_processed} clips in track {track_index}")
-                
-            except Exception as e:
-                logger.error(f"Error processing track {track_index}: {str(e)}")
-                # Continue with next track
-        
-        return f"Set up follow actions for {total_clips_processed} clips across {tracks_processed} tracks"
-    except Exception as e:
-        logger.error(f"Error setting up project follow actions: {str(e)}")
-        return f"Error setting up project follow actions: {str(e)}"
 
 # Main execution
 def main():
