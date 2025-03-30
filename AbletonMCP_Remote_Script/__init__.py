@@ -234,7 +234,8 @@ class AbletonMCP(ControlSurface):
                                  "create_arrangement_section", "duplicate_section", 
                                  "create_transition", "convert_session_to_arrangement",
                                  "set_clip_follow_action_time", "set_clip_follow_action",
-                                 "set_clip_follow_action_linked"]:
+                                 "set_clip_follow_action_linked", "setup_clip_sequence",
+                                 "setup_project_follow_actions"]:
                 # Use a thread-safe approach with a response queue
                 response_queue = queue.Queue()
                 
@@ -323,6 +324,15 @@ class AbletonMCP(ControlSurface):
                             clip_index = params.get("clip_index", 0)
                             linked = params.get("linked", True)
                             result = self._set_clip_follow_action_linked(track_index, clip_index, linked)
+                        elif command_type == "setup_clip_sequence":
+                            track_index = params.get("track_index", 0)
+                            start_clip_index = params.get("start_clip_index", 0)
+                            end_clip_index = params.get("end_clip_index", 0)
+                            loop_back = params.get("loop_back", True)
+                            result = self._setup_clip_sequence(track_index, start_clip_index, end_clip_index, loop_back)
+                        elif command_type == "setup_project_follow_actions":
+                            loop_back = params.get("loop_back", True)
+                            result = self._setup_project_follow_actions(loop_back)
                         
                         # Put the result in the queue
                         response_queue.put({"status": "success", "result": result})
@@ -1654,4 +1664,150 @@ class AbletonMCP(ControlSurface):
             return result
         except Exception as e:
             self.log_message(f"Error setting clip follow action linked: {str(e)}")
+            raise
+
+    def _setup_clip_sequence(self, track_index, start_clip_index, end_clip_index, loop_back=True):
+        """Setup a sequence of clips with follow actions to play in order"""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            
+            track = self._song.tracks[track_index]
+            
+            # Process each clip in the sequence
+            clips_processed = 0
+            for clip_index in range(start_clip_index, end_clip_index + 1):
+                try:
+                    if clip_index < 0 or clip_index >= len(track.clip_slots):
+                        self.log_message(f"Clip index {clip_index} out of range, skipping")
+                        continue
+                        
+                    clip_slot = track.clip_slots[clip_index]
+                    
+                    if not clip_slot.has_clip:
+                        self.log_message(f"No clip in slot {clip_index}, skipping")
+                        continue
+                    
+                    clip = clip_slot.clip
+                    
+                    # Set follow action to "next" with 100% probability
+                    clip.follow_action_a = 1  # Next
+                    clip.follow_action_a_probability = 1.0
+                    clip.follow_action_b = 0  # None
+                    clip.follow_action_b_probability = 0.0
+                    
+                    # Set follow action time to match clip length
+                    clip.follow_action_time = clip.length
+                    
+                    # Link follow action to clip length
+                    clip.follow_action_follow_time_linked = True
+                    
+                    # Enable follow actions
+                    clip.follow_action_enabled = True
+                    
+                    clips_processed += 1
+                    
+                except Exception as e:
+                    self.log_message(f"Error setting up follow action for clip {clip_index}: {str(e)}")
+                    # Continue with next clip
+            
+            # Handle special case for last clip to loop back to the first
+            if clips_processed > 0 and loop_back and end_clip_index < len(track.clip_slots) and track.clip_slots[end_clip_index].has_clip:
+                clip = track.clip_slots[end_clip_index].clip
+                
+                # Set the last clip to go back to the first one
+                if start_clip_index == 0:
+                    clip.follow_action_a = 3  # First
+                else:
+                    clip.follow_action_a = 6  # Other (would need specific index)
+                
+                clip.follow_action_a_probability = 1.0
+                clip.follow_action_b = 0  # None
+                clip.follow_action_b_probability = 0.0
+                clip.follow_action_enabled = True
+            
+            result = {
+                "track_index": track_index,
+                "clips_processed": clips_processed
+            }
+            return result
+            
+        except Exception as e:
+            self.log_message(f"Error setting up clip sequence: {str(e)}")
+            raise
+    
+    def _setup_project_follow_actions(self, loop_back=True):
+        """Setup follow actions for all tracks in the project"""
+        try:
+            total_clips_processed = 0
+            tracks_processed = 0
+            
+            # Process each track
+            for track_index, track in enumerate(self._song.tracks):
+                try:
+                    # Find clips in this track
+                    clips_with_content = []
+                    for i, clip_slot in enumerate(track.clip_slots):
+                        if clip_slot.has_clip:
+                            clips_with_content.append(i)
+                    
+                    if not clips_with_content:
+                        self.log_message(f"No clips found in track {track_index}, skipping")
+                        continue
+                    
+                    # Process clips in sequence
+                    clips_processed = 0
+                    for i, clip_index in enumerate(clips_with_content):
+                        try:
+                            clip_slot = track.clip_slots[clip_index]
+                            clip = clip_slot.clip
+                            
+                            # Set follow action to "next" with 100% probability
+                            action_value = 1  # Next
+                            
+                            # If this is the last clip and loop_back is True, set action to go back to first clip
+                            if i == len(clips_with_content) - 1 and loop_back:
+                                if clips_with_content[0] == 0:
+                                    action_value = 3  # First
+                                else:
+                                    action_value = 6  # Other (would need specific index)
+                            
+                            # For action A (primary action)
+                            clip.follow_action_a = action_value
+                            clip.follow_action_a_probability = 1.0
+                            
+                            # For action B (secondary action)
+                            clip.follow_action_b = 0  # None
+                            clip.follow_action_b_probability = 0.0
+                            
+                            # Set follow action time to match clip length and link it
+                            clip.follow_action_time = clip.length
+                            clip.follow_action_follow_time_linked = True
+                            
+                            # Enable follow actions
+                            clip.follow_action_enabled = True
+                            
+                            clips_processed += 1
+                            
+                        except Exception as e:
+                            self.log_message(f"Error setting up follow action for track {track_index}, clip {clip_index}: {str(e)}")
+                            # Continue with next clip
+                    
+                    if clips_processed > 0:
+                        tracks_processed += 1
+                        total_clips_processed += clips_processed
+                        self.log_message(f"Processed {clips_processed} clips in track {track_index}")
+                    
+                except Exception as e:
+                    self.log_message(f"Error processing track {track_index}: {str(e)}")
+                    # Continue with next track
+            
+            result = {
+                "total_clips_processed": total_clips_processed,
+                "tracks_processed": tracks_processed
+            }
+            return result
+            
+        except Exception as e:
+            self.log_message(f"Error setting up project follow actions: {str(e)}")
             raise
