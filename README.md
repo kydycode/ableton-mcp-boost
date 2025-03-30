@@ -1,11 +1,13 @@
 # AbletonMCP - Ableton Live Model Context Protocol Integration
-[![smithery badge](https://smithery.ai/badge/@ahujasid/ableton-mcp)](https://smithery.ai/server/@ahujasid/ableton-mcp)
+[![smithery badge](https://smithery.ai/badge/@kydycode/ableton-mcp-boost)](https://smithery.ai/server/@kydycode/ableton-mcp-boost)
 
 AbletonMCP connects Ableton Live to Claude AI through the Model Context Protocol (MCP), allowing Claude to directly interact with and control Ableton Live. This integration enables prompt-assisted music production, track creation, and Live session manipulation.
 
 ### Join the Community
 
 Give feedback, get inspired, and build on top of the MCP: [Discord](https://discord.gg/3ZrMyGKnaU). Made by [Siddharth](https://x.com/sidahuj)
+
+Fork maintained by [kydycode](https://github.com/kydycode/ableton-mcp-boost)
 
 ## Features
 
@@ -14,6 +16,7 @@ Give feedback, get inspired, and build on top of the MCP: [Discord](https://disc
 - **Instrument and effect selection**: Claude can access and load the right instruments, effects and sounds from Ableton's library
 - **Clip creation**: Create and edit MIDI clips with notes
 - **Session control**: Start and stop playback, fire clips, and control transport
+- **Arrangement Features**: Create full song arrangements with sections, transitions, and automatic conversions from Session to Arrangement view
 
 ## Components
 
@@ -26,10 +29,10 @@ The system consists of two main components:
 
 ### Installing via Smithery
 
-To install Ableton Live Integration for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@ahujasid/ableton-mcp):
+To install Ableton Live Integration for Claude Desktop automatically via Smithery:
 
 ```bash
-npx -y @smithery/cli install @ahujasid/ableton-mcp --client claude
+npx -y @smithery/cli install @kydycode/ableton-mcp-boost --client claude
 ```
 
 ### Prerequisites
@@ -39,7 +42,7 @@ npx -y @smithery/cli install @ahujasid/ableton-mcp --client claude
 - [uv package manager](https://astral.sh/uv)
 
 If you're on Mac, please install uv as:
-```
+```bash
 brew install uv
 ```
 
@@ -130,6 +133,10 @@ Once the config file has been set on Claude, and the remote script is running in
 - Load instruments and effects from Ableton's browser
 - Add notes to MIDI clips
 - Change tempo and other session parameters
+- Create full song arrangements with defined sections (intro, verse, chorus, etc.)
+- Duplicate sections with optional variations
+- Create transitions between sections (fills, risers, impacts)
+- Convert Session View clips to Arrangement View with structured layouts
 
 ## Example Commands
 
@@ -145,7 +152,10 @@ Here are some examples of what you can ask Claude to do:
 - "Add a jazz chord progression to the clip in track 1"
 - "Set the tempo to 120 BPM"
 - "Play the clip in track 2"
-
+- "Create an intro section that's 8 bars long"
+- "Duplicate the verse section from bar 16 to 24 and place it at bar 32 with medium variations"
+- "Create a transition from bar 24 to 25 with a drum fill"
+- "Convert my session clips to a full arrangement with intro, verse, chorus structure"
 
 ## Troubleshooting
 
