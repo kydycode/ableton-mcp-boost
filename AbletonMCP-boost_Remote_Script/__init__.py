@@ -21,15 +21,15 @@ HOST = "localhost"
 
 def create_instance(c_instance):
     """Create and return the AbletonMCP script instance"""
-    return AbletonMCP-boost(c_instance)
+    return AbletonMCPboost(c_instance)
 
-class AbletonMCP-boost(ControlSurface):
-    """AbletonMCP-boost Remote Script for Ableton Live"""
+class AbletonMCPboost(ControlSurface):
+    """AbletonMCPboost Remote Script for Ableton Live"""
     
     def __init__(self, c_instance):
         """Initialize the control surface"""
         ControlSurface.__init__(self, c_instance)
-        self.log_message("AbletonMCP-boost Remote Script initializing...")
+        self.log_message("AbletonMCPboost Remote Script initializing...")
         
         # Socket server for communication
         self.server = None
@@ -43,14 +43,14 @@ class AbletonMCP-boost(ControlSurface):
         # Start the socket server
         self.start_server()
         
-        self.log_message("AbletonMCP-boost initialized")
+        self.log_message("AbletonMCPboost initialized")
         
         # Show a message in Ableton
-        self.show_message("AbletonMCP-boost: Listening for commands on port " + str(DEFAULT_PORT))
+        self.show_message("AbletonMCPboost: Listening for commands on port " + str(DEFAULT_PORT))
     
     def disconnect(self):
         """Called when Ableton closes or the control surface is removed"""
-        self.log_message("AbletonMCP-boost disconnecting...")
+        self.log_message("AbletonMCPboost disconnecting...")
         self.running = False
         
         # Stop the server
@@ -71,7 +71,7 @@ class AbletonMCP-boost(ControlSurface):
                 self.log_message("Client thread still alive during disconnect")
         
         ControlSurface.disconnect(self)
-        self.log_message("AbletonMCP-boost disconnected")
+        self.log_message("AbletonMCPboost disconnected")
     
     def start_server(self):
         """Start the socket server in a separate thread"""
@@ -89,7 +89,7 @@ class AbletonMCP-boost(ControlSurface):
             self.log_message("Server started on port " + str(DEFAULT_PORT))
         except Exception as e:
             self.log_message("Error starting server: " + str(e))
-            self.show_message("AbletonMCP-boost: Error starting server - " + str(e))
+            self.show_message("AbletonMCPboost: Error starting server - " + str(e))
     
     def _server_thread(self):
         """Server thread implementation - handles client connections"""
@@ -103,7 +103,7 @@ class AbletonMCP-boost(ControlSurface):
                     # Accept connections with timeout
                     client, address = self.server.accept()
                     self.log_message("Connection accepted from " + str(address))
-                    self.show_message("AbletonMCP-boost: Client connected")
+                    self.show_message("AbletonMCPboost: Client connected")
                     
                     # Handle client in a separate thread
                     client_thread = threading.Thread(

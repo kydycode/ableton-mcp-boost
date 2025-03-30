@@ -165,7 +165,7 @@ class AbletonConnection:
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
     """Manage server startup and shutdown lifecycle"""
     try:
-        logger.info("AbletonMCP-boost server starting up")
+        logger.info("AbletonMCPboost server starting up")
         
         try:
             ableton = get_ableton_connection()
@@ -181,11 +181,11 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
             logger.info("Disconnecting from Ableton on shutdown")
             _ableton_connection.disconnect()
             _ableton_connection = None
-        logger.info("AbletonMCP-boost server shut down")
+        logger.info("AbletonMCPboost server shut down")
 
 # Create the MCP server with lifespan support
 mcp = FastMCP(
-    "AbletonMCP-boost",
+    "AbletonMCPboost",
     description="Ableton Live integration through the Model Context Protocol",
     lifespan=server_lifespan
 )

@@ -59,7 +59,7 @@ Otherwise, install from [uv's official website][https://docs.astral.sh/uv/gettin
 ```json
 {
     "mcpServers": {
-        "AbletonMCP-boost": {
+        "AbletonMCPboost": {
             "command": "uvx",
             "args": [
                 "ableton-mcp-boost"
