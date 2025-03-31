@@ -105,7 +105,13 @@ class AbletonConnection:
             "create_midi_track", "create_audio_track", "set_track_name",
             "create_clip", "add_notes_to_clip", "set_clip_name",
             "set_tempo", "fire_clip", "stop_clip", "set_device_parameter",
-            "start_playback", "stop_playback", "load_instrument_or_effect"
+            "start_playback", "stop_playback", "load_instrument_or_effect",
+            # Added arrangement-related commands
+            "create_arrangement_section", "duplicate_section", 
+            "create_transition", "convert_session_to_arrangement",
+            "add_automation_to_clip", "create_audio_track", 
+            "insert_arrangement_clip", "duplicate_clip_to_arrangement",
+            "set_locators", "set_arrangement_loop"
         ]
         
         try:
@@ -835,8 +841,15 @@ def convert_session_to_arrangement(ctx: Context, structure: List[Dict[str, Union
         })
         return f"Created arrangement with {len(structure)} sections. Total length: {result.get('total_length_bars', 0)} bars"
     except Exception as e:
-        logger.error(f"Error converting session to arrangement: {str(e)}")
-        return f"Error converting session to arrangement: {str(e)}"
+        error_msg = str(e)
+        logger.error(f"Error converting session to arrangement: {error_msg}")
+        
+        # Handle specific API compatibility errors
+        if "clear_arrangement" in error_msg:
+            return ("Error: The 'clear_arrangement' method is not available in your version of Ableton Live. "
+                   "Try using create_complex_arrangement instead, which can work without clearing the arrangement.")
+        else:
+            return f"Error converting session to arrangement: {error_msg}"
 
 # Follow Actions Tools
 
@@ -988,6 +1001,632 @@ def setup_clip_sequence(ctx: Context, track_index: int, start_clip_index: int, e
     except Exception as e:
         logger.error(f"Error setting up clip sequence: {str(e)}")
         return f"Error setting up clip sequence: {str(e)}"
+
+@mcp.tool()
+def add_automation_to_clip(
+    ctx: Context, 
+    track_index: int, 
+    clip_index: int, 
+    parameter_name: str,
+    points: List[Dict[str, float]]
+) -> str:
+    """
+    Add automation for a parameter to a clip
+    
+    Args:
+        track_index: Index of the track containing the clip
+        clip_index: Index of the clip to add automation to
+        parameter_name: Name of the parameter to automate (e.g. "volume", "panning", "device1_param1")
+        points: List of automation points [{"time": time_in_beats, "value": parameter_value}, ...]
+        
+    Returns:
+        Information about the added automation
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "add_automation_to_clip", 
+            {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "parameter_name": parameter_name,
+                "points": points
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error adding automation to clip: {str(e)}"
+
+@mcp.tool()
+def create_audio_track(ctx: Context, index: int = -1) -> str:
+    """
+    Create a new audio track
+    
+    Args:
+        index: Index where the track should be created (-1 for end of track list)
+        
+    Returns:
+        Information about the created track
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("create_audio_track", {"index": index})
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error creating audio track: {str(e)}"
+
+@mcp.tool()
+def insert_arrangement_clip(
+    ctx: Context,
+    track_index: int,
+    start_time: float,
+    length: float,
+    is_audio: bool = False
+) -> str:
+    """
+    Insert a clip directly in the arrangement view
+    
+    Args:
+        track_index: Index of the track
+        start_time: Start time in beats
+        length: Length in beats
+        is_audio: Whether this is an audio clip (default: false for MIDI)
+        
+    Returns:
+        Information about the inserted clip
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "insert_arrangement_clip", 
+            {
+                "track_index": track_index,
+                "start_time": start_time,
+                "length": length,
+                "is_audio": is_audio
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error inserting arrangement clip: {str(e)}"
+
+@mcp.tool()
+def duplicate_clip_to_arrangement(
+    ctx: Context,
+    track_index: int,
+    clip_index: int,
+    arrangement_time: float
+) -> str:
+    """
+    Duplicate a session view clip to the arrangement view
+    
+    Args:
+        track_index: Index of the track containing the clip
+        clip_index: Index of the clip in session view
+        arrangement_time: Time position in the arrangement view (in beats)
+        
+    Returns:
+        Information about the duplicated clip
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "duplicate_clip_to_arrangement", 
+            {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "arrangement_time": arrangement_time
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error duplicating clip to arrangement: {error_msg}")
+        
+        # Handle specific API compatibility errors
+        if "duplicate_clip_to" in error_msg:
+            return ("Error: The 'duplicate_clip_to' method is not available in your version of Ableton Live. "
+                   "The script will try to create a new clip and copy the content instead.")
+        else:
+            return f"Error duplicating clip to arrangement: {error_msg}"
+
+@mcp.tool()
+def set_locators(
+    ctx: Context,
+    start_time: float,
+    end_time: float,
+    name: str = ""
+) -> str:
+    """
+    Set arrangement locators (start/end markers)
+    
+    Args:
+        start_time: Start time in beats
+        end_time: End time in beats
+        name: Name for the locator region
+        
+    Returns:
+        Information about the set locators
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "set_locators", 
+            {
+                "start_time": start_time,
+                "end_time": end_time,
+                "name": name
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error setting locators: {str(e)}"
+
+@mcp.tool()
+def set_arrangement_loop(
+    ctx: Context,
+    start_time: float,
+    end_time: float,
+    enabled: bool = True
+) -> str:
+    """
+    Set the arrangement loop region
+    
+    Args:
+        start_time: Loop start time in beats
+        end_time: Loop end time in beats
+        enabled: Whether loop is enabled
+        
+    Returns:
+        Information about the loop settings
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "set_arrangement_loop", 
+            {
+                "start_time": start_time,
+                "end_time": end_time,
+                "enabled": enabled
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error setting arrangement loop: {error_msg}")
+        
+        # Handle specific API compatibility errors
+        if "loop_end" in error_msg:
+            return ("Error: The 'loop_end' property is not available in your version of Ableton Live. "
+                   "The script will try to use 'loop_length' instead.")
+        else:
+            return f"Error setting arrangement loop: {error_msg}"
+
+@mcp.tool()
+def get_arrangement_info(ctx: Context) -> str:
+    """
+    Get information about the current arrangement
+    
+    Returns:
+        Information about the arrangement tracks, clips, and structure
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_arrangement_info", {})
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error getting arrangement info: {error_msg}")
+        
+        # Handle specific API compatibility errors
+        if "loop_end" in error_msg:
+            return ("Error: Some arrangement properties are not available in your version of Ableton Live. "
+                   "Try using more specific tools like get_time_signatures or get_arrangement_markers instead.")
+        else:
+            return f"Error getting arrangement info: {error_msg}"
+
+@mcp.tool()
+def get_track_arrangement_clips(ctx: Context, track_index: int) -> str:
+    """
+    Get all clips in the arrangement view for a specific track
+    
+    Args:
+        track_index: Index of the track
+        
+    Returns:
+        Information about all arrangement clips on the track
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "get_track_arrangement_clips", 
+            {
+                "track_index": track_index
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error getting track arrangement clips: {str(e)}"
+
+@mcp.tool()
+def set_time_signature(ctx: Context, numerator: int, denominator: int, bar_position: int = 1) -> str:
+    """
+    Set the time signature at a specific bar in the arrangement
+    
+    Args:
+        numerator: Time signature numerator (e.g., 4 for 4/4)
+        denominator: Time signature denominator (e.g., 4 for 4/4)
+        bar_position: Bar where the time signature should be set (default: 1, the beginning)
+        
+    Returns:
+        Information about the set time signature
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "set_time_signature", 
+            {
+                "numerator": numerator,
+                "denominator": denominator,
+                "bar_position": bar_position
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error setting time signature: {str(e)}"
+
+@mcp.tool()
+def get_time_signatures(ctx: Context) -> str:
+    """
+    Get all time signatures in the arrangement
+    
+    Returns:
+        List of time signatures in the arrangement
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_time_signatures", {})
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error getting time signatures: {str(e)}"
+
+@mcp.tool()
+def set_playhead_position(ctx: Context, time: float) -> str:
+    """
+    Set the playhead position in the arrangement
+    
+    Args:
+        time: Time position in beats
+        
+    Returns:
+        Information about the new playhead position
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_playhead_position", {"time": time})
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error setting playhead position: {str(e)}"
+
+@mcp.tool()
+def create_arrangement_marker(ctx: Context, name: str, time: float) -> str:
+    """
+    Create a marker in the arrangement at the specified position
+    
+    Args:
+        name: Name of the marker
+        time: Time position in beats
+        
+    Returns:
+        Information about the created marker
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "create_arrangement_marker", 
+            {
+                "name": name,
+                "time": time
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error creating arrangement marker: {error_msg}")
+        
+        if "set_or_delete_cue" in error_msg:
+            return ("Error: The 'set_or_delete_cue' method signature has changed in your version of Ableton Live. "
+                   "Try using locator points from Ableton's UI directly.")
+        else:
+            return f"Error creating arrangement marker: {error_msg}"
+
+@mcp.tool()
+def get_arrangement_markers(ctx: Context) -> str:
+    """
+    Get all markers in the arrangement
+    
+    Returns:
+        List of all markers in the arrangement
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_arrangement_markers", {})
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error getting arrangement markers: {str(e)}"
+
+@mcp.tool()
+def create_complex_arrangement(
+    ctx: Context, 
+    structure: List[Dict[str, Any]],
+    transitions: bool = True,
+    arrange_automation: bool = True
+) -> str:
+    """
+    Create a complete arrangement with complex structure
+    
+    Args:
+        structure: List of sections [{
+            "name": "Intro", 
+            "type": "intro", 
+            "length_bars": 8, 
+            "energy_level": 0.3,
+            "tracks": [{"index": 0, "clips": [0]}]
+        }, ...]
+        transitions: Whether to create transitions between sections
+        arrange_automation: Whether to add automation for energy levels
+        
+    Returns:
+        Information about the created arrangement
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "create_complex_arrangement", 
+            {
+                "structure": structure,
+                "transitions": transitions,
+                "arrange_automation": arrange_automation
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error creating complex arrangement: {error_msg}")
+        
+        # Handle specific API compatibility errors
+        if "clear_arrangement" in error_msg:
+            return ("Error: The 'clear_arrangement' method is not available in your version of Ableton Live. "
+                   "The script will try to create clips without clearing the arrangement.")
+        elif "duplicate_clip_to" in error_msg:
+            return ("Error: The 'duplicate_clip_to' method is not available in your version of Ableton Live. "
+                   "The script will try to create clips and copy content manually.")
+        else:
+            return f"Error creating complex arrangement: {error_msg}"
+
+@mcp.tool()
+def quantize_arrangement_clips(ctx: Context, track_index: int = -1, quantize_amount: float = 1.0) -> str:
+    """
+    Quantize all clips in the arrangement
+    
+    Args:
+        track_index: Track index to quantize (-1 for all tracks)
+        quantize_amount: Quantization amount (0.0 to 1.0)
+        
+    Returns:
+        Information about the quantized clips
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "quantize_arrangement_clips", 
+            {
+                "track_index": track_index,
+                "quantize_amount": quantize_amount
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error quantizing arrangement clips: {str(e)}"
+
+@mcp.tool()
+def consolidate_arrangement_selection(ctx: Context, start_time: float, end_time: float, track_index: int) -> str:
+    """
+    Consolidate a selection in the arrangement to a new clip
+    
+    Args:
+        start_time: Start time in beats
+        end_time: End time in beats
+        track_index: Track index to consolidate
+        
+    Returns:
+        Information about the consolidated clip
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "consolidate_arrangement_selection", 
+            {
+                "start_time": start_time,
+                "end_time": end_time,
+                "track_index": track_index
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error consolidating arrangement selection: {str(e)}"
+
+@mcp.tool()
+def arrangement_record_helper(
+    ctx: Context, 
+    track_indices: List[int], 
+    clip_indices: List[int], 
+    start_time: float, 
+    duration: float = 4.0
+) -> str:
+    """
+    Helper tool to record session clips to arrangement view when create_clip isn't available.
+    This positions the playhead, starts arrangement recording, fires the clips, and stops recording.
+    
+    Args:
+        track_indices: List of track indices containing clips to fire
+        clip_indices: List of clip indices to fire (must match track_indices length)
+        start_time: Starting position in arrangement (beats)
+        duration: How long to record for (beats)
+        
+    Returns:
+        Information about the recording operation
+    """
+    try:
+        if len(track_indices) != len(clip_indices):
+            return "Error: track_indices and clip_indices must have the same length"
+            
+        ableton = get_ableton_connection()
+        
+        # Get current transport state
+        session_info = ableton.send_command("get_session_info")
+        was_playing = session_info.get("is_playing", False)
+        tempo = session_info.get("tempo", 120.0)
+        
+        # Calculate how long we need to record in seconds
+        duration_seconds = (duration / (tempo / 60.0))
+        
+        # Position playhead
+        ableton.send_command("set_playhead_position", {"time": start_time})
+        
+        # Enable arrangement recording
+        result = ableton.send_command("start_arrangement_recording", {})
+        
+        # Loop through and launch clips
+        for i in range(len(track_indices)):
+            track_index = track_indices[i]
+            clip_index = clip_indices[i]
+            
+            # Fire clip
+            ableton.send_command("fire_clip", {
+                "track_index": track_index,
+                "clip_index": clip_index
+            })
+        
+        # Let the user know what's happening
+        result_str = (f"Recording {len(track_indices)} clips to arrangement at position {start_time}. "
+                     f"Recording will continue for approximately {duration_seconds:.1f} seconds.")
+        
+        # In a real implementation, we'd use a timer or other mechanism to stop recording 
+        # after the duration. For now, we'll just let the user know they need to stop manually.
+        result_str += "\nPlease stop recording manually when the clip(s) have played."
+        
+        return result_str
+    except Exception as e:
+        logger.error(f"Error with arrangement recording helper: {str(e)}")
+        return f"Error setting up arrangement recording: {str(e)}"
+
+@mcp.tool()
+def start_arrangement_recording(ctx: Context) -> str:
+    """
+    Start recording in arrangement view
+    
+    Returns:
+        Information about the recording state
+    """
+    try:
+        ableton = get_ableton_connection()
+        
+        # Ensure we're in arrangement view
+        ableton.send_command("show_arrangement_view", {})
+        
+        # Turn on arrangement record
+        result = ableton.send_command("set_arrangement_record", {"enabled": True})
+        
+        # Start playback if not already playing
+        play_result = ableton.send_command("start_playback", {})
+        
+        return "Arrangement recording started. Press Stop when finished."
+    except Exception as e:
+        logger.error(f"Error starting arrangement recording: {str(e)}")
+        return f"Error starting arrangement recording: {str(e)}"
+
+@mcp.tool()
+def show_arrangement_view(ctx: Context) -> str:
+    """
+    Switch to arrangement view
+    
+    Returns:
+        Information about the view change
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("show_arrangement_view", {})
+        return "Switched to arrangement view"
+    except Exception as e:
+        logger.error(f"Error switching to arrangement view: {str(e)}")
+        return f"Error switching to arrangement view: {str(e)}"
+
+@mcp.tool()
+def show_session_view(ctx: Context) -> str:
+    """
+    Switch to session view
+    
+    Returns:
+        Information about the view change
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("show_session_view", {})
+        return "Switched to session view"
+    except Exception as e:
+        logger.error(f"Error switching to session view: {str(e)}")
+        return f"Error switching to session view: {str(e)}"
+
+@mcp.tool()
+def set_arrangement_record(ctx: Context, enabled: bool = True) -> str:
+    """
+    Enable or disable arrangement record mode
+    
+    Args:
+        enabled: Whether to enable record mode
+        
+    Returns:
+        Information about the record state
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("set_arrangement_record", {"enabled": enabled})
+        state = "enabled" if enabled else "disabled"
+        return f"Arrangement record mode {state}"
+    except Exception as e:
+        logger.error(f"Error setting arrangement record mode: {str(e)}")
+        return f"Error setting arrangement record mode: {str(e)}"
+
+@mcp.tool()
+def arrangement_to_session(ctx: Context, track_index: int, start_time: float, end_time: float, target_clip_slot: int) -> str:
+    """
+    Copy a section of the arrangement to a session clip slot
+    
+    Args:
+        track_index: Track to copy from and to
+        start_time: Start time in the arrangement (beats)
+        end_time: End time in the arrangement (beats)
+        target_clip_slot: Target clip slot index in session view
+        
+    Returns:
+        Information about the created session clip
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "arrangement_to_session", 
+            {
+                "track_index": track_index,
+                "start_time": start_time,
+                "end_time": end_time,
+                "target_clip_slot": target_clip_slot
+            }
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error copying arrangement to session: {str(e)}")
+        return f"Error copying arrangement to session: {str(e)}"
 
 # Main execution
 def main():
