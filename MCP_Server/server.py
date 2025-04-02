@@ -1628,6 +1628,207 @@ def arrangement_to_session(ctx: Context, track_index: int, start_time: float, en
         logger.error(f"Error copying arrangement to session: {str(e)}")
         return f"Error copying arrangement to session: {str(e)}"
 
+@mcp.tool()
+def add_notes_to_arrangement_clip(
+    ctx: Context, 
+    track_index: int, 
+    start_time: float, 
+    notes: List[Dict[str, Union[int, float, bool]]],
+    ensure_length: bool = True
+) -> str:
+    """
+    Add MIDI notes to a clip in the arrangement view
+    
+    Args:
+        track_index: Index of the track containing the clip
+        start_time: Start time of the clip in beats
+        notes: List of note objects with pitch, start_time, duration, velocity, and mute properties
+        ensure_length: Whether to ensure the clip is resized to accommodate all notes (default: true)
+        
+    Returns:
+        Information about the added notes
+    """
+    try:
+        # Calculate required length if ensure_length is true
+        max_note_end = 0
+        if ensure_length:
+            for note in notes:
+                note_end = note.get("start_time", 0) + note.get("duration", 0.25)
+                max_note_end = max(max_note_end, note_end)
+            logger.info(f"Notes require length of at least: {max_note_end} beats")
+        
+        ableton = get_ableton_connection()
+        
+        # First, if ensure_length is true, check the current clip length
+        if ensure_length:
+            track_clips = ableton.send_command(
+                "get_track_arrangement_clips",
+                {"track_index": track_index}
+            )
+            
+            # Find the clip at or near the start_time
+            found_clip = False
+            clip_length = 0
+            if "clips" in track_clips:
+                for clip in track_clips.get("clips", []):
+                    clip_start = clip.get("start_time", 0)
+                    if abs(clip_start - start_time) < 0.1:  # Within 0.1 beats
+                        found_clip = True
+                        clip_length = clip.get("length", 0)
+                        logger.info(f"Found clip at {clip_start} with length {clip_length}")
+                        break
+            
+            # If clip was found but is too short, try to resize it
+            if found_clip and clip_length < max_note_end:
+                logger.info(f"Clip length {clip_length} is less than required {max_note_end}, attempting resize")
+                
+                # Try to resize using set_clip_loop_end
+                try:
+                    ableton.send_command(
+                        "set_clip_loop_end",
+                        {
+                            "track_index": track_index,
+                            "clip_start_time": start_time,
+                            "loop_end": max_note_end
+                        }
+                    )
+                    logger.info(f"Resized clip to {max_note_end} beats")
+                except Exception as e:
+                    logger.warning(f"Could not resize clip: {str(e)}")
+        
+        # Now add the notes
+        result = ableton.send_command(
+            "add_notes_to_clip", 
+            {
+                "track_index": track_index,
+                "clip_index": f"arrangement:{start_time}",
+                "notes": notes
+            }
+        )
+        
+        # Include the max_note_end in the response
+        if ensure_length and max_note_end > 0:
+            result_dict = json.loads(result) if isinstance(result, str) else result
+            if isinstance(result_dict, dict):
+                result_dict["required_length"] = max_note_end
+                result = json.dumps(result_dict, indent=2)
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error adding notes to arrangement clip: {str(e)}")
+        return f"Error adding notes to arrangement clip: {str(e)}"
+
+@mcp.tool()
+def create_arrangement_track(
+    ctx: Context,
+    track_name: str,
+    clips: List[Dict[str, Any]],
+    is_audio: bool = False,
+    track_index: int = -1
+) -> str:
+    """
+    Create a track and multiple clips in arrangement view in a single operation
+    
+    Args:
+        track_name: Name for the new track
+        clips: List of clip specifications with start_time, length, and optionally notes array
+        is_audio: Whether to create an audio track (default: false for MIDI)
+        track_index: Index to insert the new track at (-1 for end)
+        
+    Returns:
+        Information about the created track and clips
+    """
+    try:
+        ableton = get_ableton_connection()
+        
+        # Make sure we're in arrangement view
+        ableton.send_command("show_arrangement_view", {})
+        
+        # Create the track
+        track_result = {}
+        if is_audio:
+            track_result = ableton.send_command("create_audio_track", {"index": track_index})
+        else:
+            track_result = ableton.send_command("create_midi_track", {"index": track_index})
+        
+        # Get the resulting track index
+        new_track_index = track_result.get("index", 0)
+        
+        # Set the track name
+        ableton.send_command("set_track_name", {"track_index": new_track_index, "name": track_name})
+        
+        # Create each clip
+        clip_results = []
+        for clip_spec in clips:
+            start_time = clip_spec.get("start_time", 0.0)
+            length = clip_spec.get("length", 4.0)
+            name = clip_spec.get("name", "")
+            notes = clip_spec.get("notes", [])
+            
+            # Create the clip
+            clip_result = ableton.send_command(
+                "insert_arrangement_clip", 
+                {
+                    "track_index": new_track_index,
+                    "start_time": start_time,
+                    "length": length,
+                    "is_audio": is_audio
+                }
+            )
+            
+            # Add notes if this is a MIDI clip with notes specified
+            if not is_audio and notes:
+                note_result = ableton.send_command(
+                    "add_notes_to_clip",
+                    {
+                        "track_index": new_track_index,
+                        "clip_index": f"arrangement:{start_time}",
+                        "notes": notes
+                    }
+                )
+            
+            # Set clip name if specified
+            if name:
+                # We can't directly name arrangement clips, so we'll include it in the result
+                clip_result["name"] = name
+            
+            clip_results.append({
+                "start_time": start_time,
+                "length": length,
+                "name": name,
+                "note_count": len(notes) if not is_audio else 0
+            })
+        
+        # Return the comprehensive result
+        result = {
+            "track_index": new_track_index,
+            "track_name": track_name,
+            "is_audio": is_audio,
+            "clip_count": len(clip_results),
+            "clips": clip_results
+        }
+        
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error creating arrangement track: {str(e)}")
+        return f"Error creating arrangement track: {str(e)}"
+
+@mcp.tool()
+def get_current_view(ctx: Context) -> str:
+    """
+    Get the current view in Ableton (Session or Arrangement)
+    
+    Returns:
+        Information about the current view
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command("get_current_view", {})
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting current view: {str(e)}")
+        return f"Error getting current view: {str(e)}"
+
 # Main execution
 def main():
     """Run the MCP server"""

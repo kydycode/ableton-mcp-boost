@@ -250,6 +250,8 @@ class AbletonMCPboost(ControlSurface):
             elif command_type == "get_track_arrangement_clips":
                 track_index = params.get("track_index", 0)
                 response["result"] = self._get_track_arrangement_clips(track_index)
+            elif command_type == "get_current_view":
+                response["result"] = self._get_current_view()
             elif command_type == "get_time_signatures":
                 response["result"] = self._get_time_signatures()
             elif command_type == "get_arrangement_markers":
@@ -272,7 +274,7 @@ class AbletonMCPboost(ControlSurface):
                                  # Add new arrangement-specific commands
                                  "add_automation_to_clip", "create_audio_track",
                                  "insert_arrangement_clip", "duplicate_clip_to_arrangement",
-                                 "set_locators", "set_arrangement_loop",
+                                 "set_locators", "set_arrangement_loop", "set_clip_loop_end",
                                  "set_time_signature", "set_playhead_position",
                                  "create_arrangement_marker", "create_complex_arrangement",
                                  "quantize_arrangement_clips", "consolidate_arrangement_selection",
@@ -407,7 +409,11 @@ class AbletonMCPboost(ControlSurface):
                             end_time = params.get("end_time", 4.0)
                             enabled = params.get("enabled", True)
                             result = self._set_arrangement_loop(start_time, end_time, enabled)
-                        # Additional arrangement commands
+                        elif command_type == "set_clip_loop_end":
+                            track_index = params.get("track_index", 0)
+                            clip_start_time = params.get("clip_start_time", 0.0)
+                            loop_end = params.get("loop_end", 4.0)
+                            result = self._set_clip_loop_end(track_index, clip_start_time, loop_end)
                         elif command_type == "set_time_signature":
                             numerator = params.get("numerator", 4)
                             denominator = params.get("denominator", 4)
@@ -628,43 +634,337 @@ class AbletonMCPboost(ControlSurface):
             raise
     
     def _add_notes_to_clip(self, track_index, clip_index, notes):
-        """Add MIDI notes to a clip"""
+        """Add MIDI notes to a clip
+        
+        If clip_index is a number, we treat it as a session view clip index
+        If clip_index is a string starting with 'arrangement:', we treat the rest as arrangement clip start time
+        """
         try:
             if track_index < 0 or track_index >= len(self._song.tracks):
                 raise IndexError("Track index out of range")
             
             track = self._song.tracks[track_index]
+            clip = None
             
-            if clip_index < 0 or clip_index >= len(track.clip_slots):
-                raise IndexError("Clip index out of range")
+            # Determine if this is a session or arrangement clip
+            is_arrangement = False
+            arrangement_time = 0
             
-            clip_slot = track.clip_slots[clip_index]
-            
-            if not clip_slot.has_clip:
-                raise Exception("No clip in slot")
-            
-            clip = clip_slot.clip
-            
-            # Convert note data to Live's format
-            live_notes = []
-            for note in notes:
-                pitch = note.get("pitch", 60)
-                start_time = note.get("start_time", 0.0)
-                duration = note.get("duration", 0.25)
-                velocity = note.get("velocity", 100)
-                mute = note.get("mute", False)
+            if isinstance(clip_index, str) and clip_index.startswith("arrangement:"):
+                # This is an arrangement clip reference
+                is_arrangement = True
+                try:
+                    arrangement_time = float(clip_index.split(":")[1])
+                except (ValueError, IndexError):
+                    raise ValueError("Invalid arrangement time format. Use 'arrangement:time'")
                 
-                live_notes.append((pitch, start_time, duration, velocity, mute))
+                self.log_message(f"Looking for clip at arrangement time {arrangement_time}")
+                
+                # Find the clip at this position in the arrangement
+                found_clip = None
+                
+                # Safely get arrangement clips
+                if not hasattr(track, 'arrangement_clips'):
+                    self.log_message("Track doesn't have arrangement_clips property")
+                    raise Exception("Track doesn't support arrangement clips")
+                
+                # Log how many arrangement clips we found
+                clip_count = len(track.arrangement_clips)
+                self.log_message(f"Found {clip_count} arrangement clips on track")
+                
+                for arr_clip in track.arrangement_clips:
+                    # Log clip information for debugging
+                    self.log_message(f"Checking clip: {arr_clip.name if hasattr(arr_clip, 'name') else 'Unnamed clip'}")
+                    
+                    # Handle different ways clips might store start/end times - FIXED VERSION
+                    clip_start = None
+                    clip_end = None
+                    
+                    # More careful extraction of start time
+                    try:
+                        if hasattr(arr_clip, 'start_time'):
+                            # Direct access to start_time property
+                            clip_start = arr_clip.start_time
+                            self.log_message(f"Got start_time directly: {clip_start}")
+                        elif hasattr(arr_clip, 'start_marker'):
+                            # Check if start_marker is a float directly
+                            if isinstance(arr_clip.start_marker, (int, float)):
+                                clip_start = float(arr_clip.start_marker)
+                                self.log_message(f"Start marker is a float/int: {clip_start}")
+                            # Check if start_marker has a time attribute
+                            elif hasattr(arr_clip.start_marker, 'time'):
+                                clip_start = arr_clip.start_marker.time
+                                self.log_message(f"Got start time from marker: {clip_start}")
+                            # Try direct conversion as a fallback
+                            else:
+                                try:
+                                    clip_start = float(arr_clip.start_marker)
+                                    self.log_message(f"Converted start marker to float: {clip_start}")
+                                except (TypeError, ValueError):
+                                    self.log_message(f"Couldn't determine clip start time")
+                    except Exception as e:
+                        self.log_message(f"Error getting clip start time: {str(e)}")
+                    
+                    # More careful extraction of end time
+                    try:
+                        if hasattr(arr_clip, 'end_time'):
+                            # Direct access to end_time property
+                            clip_end = arr_clip.end_time
+                            self.log_message(f"Got end_time directly: {clip_end}")
+                        elif hasattr(arr_clip, 'end_marker'):
+                            # Check if end_marker is a float directly
+                            if isinstance(arr_clip.end_marker, (int, float)):
+                                clip_end = float(arr_clip.end_marker)
+                                self.log_message(f"End marker is a float/int: {clip_end}")
+                            # Check if end_marker has a time attribute
+                            elif hasattr(arr_clip.end_marker, 'time'):
+                                clip_end = arr_clip.end_marker.time
+                                self.log_message(f"Got end time from marker: {clip_end}")
+                            # Try direct conversion as a fallback
+                            else:
+                                try:
+                                    clip_end = float(arr_clip.end_marker)
+                                    self.log_message(f"Converted end marker to float: {clip_end}")
+                                except (TypeError, ValueError):
+                                    self.log_message(f"Couldn't determine clip end time")
+                        # Calculate from start + length if we have those
+                        elif clip_start is not None and hasattr(arr_clip, 'length'):
+                            clip_end = clip_start + arr_clip.length
+                            self.log_message(f"Calculated end time from start+length: {clip_end}")
+                    except Exception as e:
+                        self.log_message(f"Error getting clip end time: {str(e)}")
+                    
+                    # Skip if we couldn't determine times
+                    if clip_start is None:
+                        self.log_message("Couldn't determine clip start time, skipping")
+                        continue
+                    
+                    # If we have a start time but no end time, try to estimate it
+                    if clip_end is None and hasattr(arr_clip, 'length'):
+                        clip_end = clip_start + arr_clip.length
+                        self.log_message(f"Estimated end time from length: {clip_end}")
+                    elif clip_end is None:
+                        # Default to start time + 4 beats if all else fails
+                        clip_end = clip_start + 4.0
+                        self.log_message(f"Using default end time: {clip_end}")
+                    
+                    # Log what we found
+                    self.log_message(f"Clip time range: {clip_start} to {clip_end}")
+                    
+                    # If time is within clip bounds or very close to start (within 0.1 beats)
+                    if (clip_start <= arrangement_time <= clip_end) or abs(clip_start - arrangement_time) < 0.1:
+                        found_clip = arr_clip
+                        self.log_message(f"Found clip at time {arrangement_time}")
+                        break
+                
+                if found_clip is None:
+                    # If we didn't find a clip at the exact time, try to find the closest one
+                    self.log_message("Exact clip not found, looking for closest clip")
+                    closest_clip = None
+                    min_distance = float('inf')
+                    
+                    for arr_clip in track.arrangement_clips:
+                        # Get start time using same careful approach as above
+                        clip_start = None
+                        try:
+                            if hasattr(arr_clip, 'start_time'):
+                                clip_start = arr_clip.start_time
+                            elif hasattr(arr_clip, 'start_marker'):
+                                if isinstance(arr_clip.start_marker, (int, float)):
+                                    clip_start = float(arr_clip.start_marker)
+                                elif hasattr(arr_clip.start_marker, 'time'):
+                                    clip_start = arr_clip.start_marker.time
+                        except Exception:
+                            pass
+                        
+                        if clip_start is None:
+                            continue
+                            
+                        distance = abs(clip_start - arrangement_time)
+                        if distance < min_distance:
+                            min_distance = distance
+                            closest_clip = arr_clip
+                    
+                    if closest_clip is not None and min_distance < 2.0:  # Accept clips within 2 beats
+                        found_clip = closest_clip
+                        self.log_message(f"Found closest clip at distance {min_distance}")
+                
+                if found_clip is None:
+                    self.log_message(f"No clip found at or near arrangement time {arrangement_time}")
+                    raise Exception(f"No clip found at arrangement time {arrangement_time}")
+                
+                clip = found_clip
+                self.log_message(f"Using arrangement clip: {clip.name if hasattr(clip, 'name') else 'Unnamed'}")
+            else:
+                # This is a session clip reference
+                if clip_index < 0 or clip_index >= len(track.clip_slots):
+                    raise IndexError("Clip index out of range")
+                
+                clip_slot = track.clip_slots[clip_index]
+                
+                if not clip_slot.has_clip:
+                    raise Exception("No clip in slot")
+                
+                clip = clip_slot.clip
             
-            # Add the notes
-            clip.set_notes(tuple(live_notes))
+            if not clip:
+                raise Exception("Clip not found")
+                
+            # Check if this is a MIDI clip
+            if hasattr(clip, 'is_audio_clip') and clip.is_audio_clip:
+                raise Exception("Cannot add MIDI notes to an audio clip")
             
-            result = {
-                "note_count": len(notes)
-            }
+            # Calculate the required length for all notes
+            max_note_end_time = 0
+            for note in notes:
+                note_start = note.get("start_time", 0.0)
+                note_duration = note.get("duration", 0.25)
+                note_end = note_start + note_duration
+                max_note_end_time = max(max_note_end_time, note_end)
+            
+            # Check if clip needs to be extended (for arrangement clips)
+            if is_arrangement and max_note_end_time > 0:
+                current_length = 0
+                if hasattr(clip, 'length'):
+                    current_length = clip.length
+                
+                self.log_message(f"Current clip length: {current_length}, required length: {max_note_end_time}")
+                
+                # If notes extend beyond current clip length, resize the clip
+                if max_note_end_time > current_length:
+                    try:
+                        # Try different ways to resize the clip
+                        if hasattr(clip, 'end_marker'):
+                            # Get start time
+                            clip_start = 0
+                            try:
+                                if hasattr(clip, 'start_time'):
+                                    clip_start = clip.start_time
+                                elif hasattr(clip, 'start_marker'):
+                                    if isinstance(clip.start_marker, (int, float)):
+                                        clip_start = float(clip.start_marker)
+                                    elif hasattr(clip.start_marker, 'time'):
+                                        clip_start = clip.start_marker.time
+                            except Exception:
+                                self.log_message("Couldn't determine clip start time for resize")
+                            
+                            # Set new end marker
+                            new_end_time = clip_start + max_note_end_time
+                            
+                            # Handle different types of end markers
+                            if isinstance(clip.end_marker, (int, float)):
+                                clip.end_marker = float(new_end_time)
+                                self.log_message(f"Set end marker as float to {new_end_time}")
+                            elif hasattr(clip.end_marker, 'time'):
+                                clip.end_marker.time = new_end_time
+                                self.log_message(f"Set end marker time to {new_end_time}")
+                            else:
+                                try:
+                                    # Try direct assignment
+                                    clip.end_marker = new_end_time
+                                    self.log_message(f"Set end marker directly to {new_end_time}")
+                                except Exception as e:
+                                    self.log_message(f"Error setting end marker: {str(e)}")
+                        elif hasattr(clip, 'loop') and hasattr(clip.loop, 'end_time'):
+                            # Some versions might use loop.end_time
+                            clip.loop.end_time = max_note_end_time
+                            self.log_message(f"Set loop end time to {max_note_end_time}")
+                        elif hasattr(clip, 'loop_end'):
+                            # Direct loop_end property
+                            clip.loop_end = max_note_end_time
+                            self.log_message(f"Set loop_end to {max_note_end_time}")
+                        
+                        # Check if we successfully extended the clip
+                        if hasattr(clip, 'length'):
+                            self.log_message(f"New clip length after extension: {clip.length}")
+                    except Exception as resize_error:
+                        self.log_message(f"Error resizing clip: {str(resize_error)}")
+            
+            # Convert note data to Live's format and add notes
+            if hasattr(clip, 'add_new_notes') and not is_arrangement:
+                # Live 11+ method for session clips
+                note_specs = []
+                for note in notes:
+                    pitch = note.get("pitch", 60)
+                    start_time = note.get("start_time", 0.0)
+                    duration = note.get("duration", 0.25)
+                    velocity = note.get("velocity", 100)
+                    mute = note.get("mute", False)
+                    
+                    note_spec = {
+                        "pitch": pitch,
+                        "start_time": start_time,
+                        "duration": duration,
+                        "velocity": velocity,
+                        "mute": mute
+                    }
+                    note_specs.append(note_spec)
+                
+                clip.add_new_notes(note_specs)
+                self.log_message(f"Added {len(note_specs)} notes using add_new_notes")
+            else:
+                # For arrangement clips or older Live versions
+                live_notes = []
+                for note in notes:
+                    pitch = note.get("pitch", 60)
+                    start_time = note.get("start_time", 0.0)
+                    duration = note.get("duration", 0.25)
+                    velocity = note.get("velocity", 100)
+                    mute = note.get("mute", False)
+                    
+                    live_notes.append((pitch, start_time, duration, velocity, mute))
+                
+                # Get existing notes
+                existing_notes = []
+                try:
+                    if hasattr(clip, 'get_notes'):
+                        # Get notes from 0 to end of clip across all pitches
+                        clip_length = clip.length if hasattr(clip, 'length') else max_note_end_time
+                        existing_notes = clip.get_notes(0, 0, clip_length, 128)
+                except Exception as e:
+                    self.log_message(f"Error getting existing notes: {str(e)}")
+                
+                # Combine with new notes
+                combined_notes = list(existing_notes) + live_notes
+                
+                # Replace all notes
+                try:
+                    clip.set_notes(tuple(combined_notes))
+                    self.log_message(f"Added {len(live_notes)} notes using set_notes")
+                    
+                    # Check final clip length after adding notes
+                    if hasattr(clip, 'length'):
+                        self.log_message(f"Final clip length after adding notes: {clip.length}")
+                        
+                        # If the clip still isn't long enough, make one more attempt to extend it
+                        if is_arrangement and clip.length < max_note_end_time:
+                            try:
+                                # Create a clear endpoint note to force clip extension
+                                dummy_note = (60, max_note_end_time - 0.01, 0.01, 1, False)
+                                clip.set_notes(tuple(combined_notes + [dummy_note]))
+                                self.log_message(f"Added dummy note to extend clip to {max_note_end_time}")
+                            except Exception as e:
+                                self.log_message(f"Error adding dummy note: {str(e)}")
+                except Exception as e:
+                    self.log_message(f"Error setting notes: {str(e)}")
+                    raise
+            
+            # Build result with safe attribute access
+            result = {"note_count": len(notes), "is_arrangement": is_arrangement}
+            
+            if hasattr(clip, 'length'):
+                result["clip_length"] = clip.length
+            
+            if hasattr(clip, 'name'):
+                result["clip_name"] = clip.name
+            
+            # Add the required length for completeness
+            result["required_length"] = max_note_end_time
+            
             return result
         except Exception as e:
-            self.log_message("Error adding notes to clip: " + str(e))
+            self.log_message(f"Error adding notes to clip: {str(e)}")
+            self.log_message(traceback.format_exc())
             raise
     
     def _set_clip_name(self, track_index, clip_index, name):
@@ -2035,7 +2335,7 @@ class AbletonMCPboost(ControlSurface):
             raise
     
     def _insert_arrangement_clip(self, track_index, start_time, length, is_audio=False):
-        """Insert a clip directly in the arrangement view without using create_clip"""
+        """Insert a clip directly in the arrangement view"""
         try:
             if track_index < 0 or track_index >= len(self._song.tracks):
                 raise IndexError("Track index out of range")
@@ -2048,59 +2348,257 @@ class AbletonMCPboost(ControlSurface):
             elif not is_audio and not track.has_midi_input:
                 raise Exception("Cannot create MIDI clip on audio track")
             
-            # For Live 11 without create_clip, we'll use a different approach
-            # Similar to the duplicate_clip_to_arrangement method:
-            # 1. Find a suitable clip slot with a clip
-            # 2. Position the playhead
-            # 3. Enable recording
-            # 4. Fire the clip
+            # Ensure we're definitively in arrangement view before proceeding
+            self._show_arrangement_view()
             
-            # First, we need to find a clip to use as a template
-            template_clip_slot = None
-            for slot in track.clip_slots:
-                if slot.has_clip:
-                    template_clip_slot = slot
-                    break
+            # Give Ableton a moment to update the view
+            import time
+            time.sleep(0.2)
             
-            # If no template found, we can't insert a clip this way
-            if template_clip_slot is None:
-                # Return a placeholder result
-                result = {
-                    "track_index": track_index,
-                    "start_time": start_time,
-                    "length": length,
-                    "note": "No template clip available. Create a clip in session view first."
-                }
-                return result
+            # Log current view state
+            if hasattr(self._song.view, 'focused_document_view'):
+                self.log_message(f"Confirmed view: {self._song.view.focused_document_view}")
             
-            # Otherwise, use similar approach to duplicate_clip_to_arrangement
+            # Ensure length is valid
+            if length <= 0:
+                self.log_message("Invalid clip length, using default of 4 beats")
+                length = 4.0
+            
+            # First, try to use create_clip if available (Live 11+)
+            clip = None
+            if hasattr(track, 'create_clip'):
+                try:
+                    self.log_message(f"Creating arrangement clip using create_clip at {start_time} with length {length}")
+                    clip = track.create_clip(start_time, length)
+                    
+                    # Log success
+                    if clip is not None:
+                        self.log_message("Successfully created clip using create_clip")
+                        
+                        # Verify the clip length
+                        if hasattr(clip, 'length'):
+                            self.log_message(f"Created clip with length: {clip.length}")
+                            
+                            # If the length is not correct, try to fix it
+                            if abs(clip.length - length) > 0.1:
+                                if hasattr(clip, 'end_marker') and hasattr(clip.end_marker, 'time'):
+                                    try:
+                                        clip.end_marker.time = start_time + length
+                                        self.log_message(f"Adjusted clip end marker to {start_time + length}")
+                                    except Exception as e:
+                                        self.log_message(f"Error adjusting clip end marker: {str(e)}")
+                    else:
+                        self.log_message("create_clip returned None")
+                except Exception as e:
+                    self.log_message(f"Error using create_clip: {str(e)}")
+                
+                # Return successfully if clip was created
+                if clip is not None:
+                    # Add a dummy note at the end to ensure clip spans the full length
+                    if not is_audio and hasattr(clip, 'set_notes'):
+                        try:
+                            # Create a silent note at the end of the clip to ensure length is preserved
+                            dummy_note = (60, length - 0.01, 0.01, 1, True)  # Muted, nearly inaudible
+                            clip.set_notes((dummy_note,))
+                            self.log_message("Added dummy note to preserve clip length")
+                        except Exception as e:
+                            self.log_message(f"Error adding dummy note: {str(e)}")
+                    
+                    result = {
+                        "track_index": track_index,
+                        "start_time": start_time,
+                        "length": length,
+                        "actual_length": clip.length if hasattr(clip, 'length') else length,
+                        "clip_id": str(clip._live_ptr) if hasattr(clip, '_live_ptr') else None,
+                        "clip_name": clip.name if hasattr(clip, 'name') else "",
+                        "is_audio": is_audio,
+                        "method": "create_clip"
+                    }
+                    return result
+            else:
+                self.log_message("Track doesn't have create_clip method")
+            
+            # If create_clip is not available or failed, try alternative approach
+            self.log_message("Using alternative recording approach to create arrangement clip")
+            
+            # Store original state to restore later
             current_position = self._song.current_song_time
             was_playing = self._song.is_playing
-            was_recording = self._song.record_mode
+            was_recording = self._song.record_mode if hasattr(self._song, 'record_mode') else False
+            
+            # Make sure track is armed for recording
+            if hasattr(track, 'arm'):
+                # Unarm all other tracks first
+                for other_track in self._song.tracks:
+                    if other_track != track and hasattr(other_track, 'arm') and other_track.arm:
+                        other_track.arm = False
+                
+                # Arm our target track
+                track.arm = True
+                self.log_message(f"Armed track {track_index} for recording")
+            else:
+                self.log_message("Track doesn't have arm property")
             
             # Position the playhead
             self._song.current_song_time = start_time
+            self.log_message(f"Set playhead position to {start_time}")
             
             # Enable arrangement record mode
-            self._song.record_mode = True
+            if hasattr(self._song, 'record_mode'):
+                self._song.record_mode = True
+                self.log_message("Enabled record mode")
+            else:
+                self.log_message("Song doesn't have record_mode property")
             
             # Start playback if not already playing
             if not self._song.is_playing:
                 self._song.start_playing()
+                self.log_message("Started playback")
             
-            # Fire the template clip
-            template_clip_slot.fire()
+            # For MIDI tracks, we can try to create a note to ensure clip creation
+            if not is_audio and track.has_midi_input:
+                # Select the track in the view
+                self._song.view.selected_track = track
+                self.log_message("Selected track in view")
+                
+                # Wait for clip creation
+                time.sleep(0.3)
+                
+                # Find all arrangement clips to log
+                if hasattr(track, 'arrangement_clips'):
+                    clip_count = len(track.arrangement_clips)
+                    self.log_message(f"Found {clip_count} clips on track after starting recording")
+                    
+                    # Log information about each clip
+                    for i, arr_clip in enumerate(track.arrangement_clips):
+                        if hasattr(arr_clip, 'name'):
+                            clip_name = arr_clip.name
+                        else:
+                            clip_name = f"Clip {i}"
+                            
+                        if hasattr(arr_clip, 'start_marker') and hasattr(arr_clip.start_marker, 'time'):
+                            clip_start = arr_clip.start_marker.time
+                        elif hasattr(arr_clip, 'start_time'):
+                            clip_start = arr_clip.start_time
+                        else:
+                            clip_start = "unknown"
+                            
+                        self.log_message(f"Clip {i}: {clip_name} at position {clip_start}")
+                
+                # Try to find the newly created MIDI clip
+                new_clip = None
+                if hasattr(track, 'arrangement_clips'):
+                    for arr_clip in track.arrangement_clips:
+                        clip_start = None
+                        if hasattr(arr_clip, 'start_marker') and hasattr(arr_clip.start_marker, 'time'):
+                            clip_start = arr_clip.start_marker.time
+                        elif hasattr(arr_clip, 'start_time'):
+                            clip_start = arr_clip.start_time
+                        elif hasattr(arr_clip, 'start_marker') and isinstance(arr_clip.start_marker, (int, float)):
+                            clip_start = float(arr_clip.start_marker)
+                        
+                        if clip_start is not None and abs(clip_start - start_time) < 0.1:  # Small tolerance for floating point
+                            new_clip = arr_clip
+                            self.log_message(f"Found newly created clip at {clip_start}")
+                            break
+                
+                # If we found a clip, add placeholder notes throughout the length to ensure it's sized correctly
+                if new_clip is not None:
+                    if hasattr(new_clip, 'get_notes') and hasattr(new_clip, 'set_notes'):
+                        try:
+                            # Create notes to span the entire requested length
+                            notes = []
+                            
+                            # Add a note at the start (audible)
+                            notes.append((60, 0.0, 0.1, 100, False))
+                            
+                            # Add a note at the end (silent/muted) to force the correct length
+                            notes.append((60, length - 0.1, 0.1, 1, True))
+                            
+                            # Set the notes
+                            new_clip.set_notes(tuple(notes))
+                            self.log_message(f"Added placeholder notes to span clip length of {length}")
+                            
+                            # Verify the clip length
+                            if hasattr(new_clip, 'length'):
+                                self.log_message(f"Clip length after adding notes: {new_clip.length}")
+                        except Exception as note_error:
+                            self.log_message(f"Error adding placeholder notes: {str(note_error)}")
+                    else:
+                        self.log_message("Clip doesn't support adding notes")
+                else:
+                    self.log_message("Could not find newly created clip")
             
-            # Return a placeholder result
-            result = {
-                "track_index": track_index,
-                "start_time": start_time,
-                "length": length,
-                "note": "Clip creation initiated. Check arrangement view."
-            }
+            # Wait a moment for clip creation
+            time.sleep(0.5)
+            
+            # Stop recording and playback, restore original state
+            if hasattr(self._song, 'record_mode'):
+                self._song.record_mode = was_recording
+                self.log_message(f"Restored record mode to {was_recording}")
+            
+            if not was_playing:
+                self._song.stop_playing()
+                self.log_message("Stopped playback")
+            
+            self._song.current_song_time = current_position
+            self.log_message(f"Restored playhead position to {current_position}")
+            
+            # Try to find the newly created clip
+            new_clip = None
+            if hasattr(track, 'arrangement_clips'):
+                for arr_clip in track.arrangement_clips:
+                    clip_start = None
+                    if hasattr(arr_clip, 'start_marker') and hasattr(arr_clip.start_marker, 'time'):
+                        clip_start = arr_clip.start_marker.time
+                    elif hasattr(arr_clip, 'start_time'):
+                        clip_start = arr_clip.start_time
+                    elif hasattr(arr_clip, 'start_marker') and isinstance(arr_clip.start_marker, (int, float)):
+                        clip_start = float(arr_clip.start_marker)
+                    
+                    if clip_start is not None and abs(clip_start - start_time) < 0.1:  # Small tolerance for floating point
+                        new_clip = arr_clip
+                        self.log_message(f"Found newly created clip at {clip_start}")
+                        break
+            
+            if new_clip is not None:
+                self.log_message("Successfully created clip using recording method")
+                
+                # Set clip length if it's not already correct
+                if hasattr(new_clip, 'length') and hasattr(new_clip, 'end_marker') and hasattr(new_clip.end_marker, 'time'):
+                    if abs(new_clip.length - length) > 0.1:
+                        try:
+                            new_clip.end_marker.time = start_time + length
+                            self.log_message(f"Adjusted clip length to {length}")
+                        except Exception as e:
+                            self.log_message(f"Error adjusting clip length: {str(e)}")
+                
+                result = {
+                    "track_index": track_index,
+                    "start_time": start_time,
+                    "length": length,
+                    "actual_length": new_clip.length if hasattr(new_clip, 'length') else length,
+                    "clip_id": str(new_clip._live_ptr) if hasattr(new_clip, '_live_ptr') else None,
+                    "clip_name": new_clip.name if hasattr(new_clip, 'name') else "",
+                    "is_audio": is_audio,
+                    "method": "recording"
+                }
+            else:
+                self.log_message("Could not confirm clip creation, but operation completed")
+                
+                result = {
+                    "track_index": track_index,
+                    "start_time": start_time,
+                    "length": length,
+                    "is_audio": is_audio,
+                    "method": "recording",
+                    "note": "Clip creation initiated. Check arrangement view."
+                }
+            
             return result
         except Exception as e:
             self.log_message(f"Error inserting arrangement clip: {str(e)}")
+            self.log_message(traceback.format_exc())
             raise
     
     def _duplicate_clip_to_arrangement(self, track_index, clip_index, arrangement_time):
@@ -2255,6 +2753,67 @@ class AbletonMCPboost(ControlSurface):
             return result
         except Exception as e:
             self.log_message(f"Error getting arrangement info: {str(e)}")
+            raise
+            
+    def _get_current_view(self):
+        """Get the current view information (Session or Arrangement)"""
+        try:
+            result = {
+                "success": True,
+                "views_available": []
+            }
+            
+            # First approach: focused_document_view (Live 11 API)
+            if hasattr(self._song.view, 'focused_document_view'):
+                current_view = self._song.view.focused_document_view
+                result["current_view"] = current_view
+                result["api_method"] = "focused_document_view"
+                self.log_message(f"Current view detected via focused_document_view: {current_view}")
+            
+            # Try to get all available views (for debugging)
+            if hasattr(self._song.view, 'available_main_views'):
+                available_views = self._song.view.available_main_views()
+                result["views_available"] = available_views
+                self.log_message(f"Available views: {available_views}")
+            
+            # For older versions, try to determine based on visibility
+            if "current_view" not in result and hasattr(self._song.view, 'is_view_visible'):
+                is_arranger = self._song.view.is_view_visible('Arranger')
+                is_session = self._song.view.is_view_visible('Session')
+                
+                if is_arranger and not is_session:
+                    result["current_view"] = "Arranger"
+                elif is_session and not is_arranger:
+                    result["current_view"] = "Session"
+                else:
+                    result["current_view"] = "Unknown"
+                result["api_method"] = "is_view_visible"
+                result["arranger_visible"] = is_arranger
+                result["session_visible"] = is_session
+                self.log_message(f"View detection via is_view_visible: Arranger={is_arranger}, Session={is_session}")
+            
+            # Final fallback
+            if "current_view" not in result:
+                result["current_view"] = "Unknown"
+                result["api_method"] = "unavailable"
+                self.log_message("Could not determine current view state")
+            
+            # Add song playback state
+            if hasattr(self._song, 'is_playing'):
+                result["is_playing"] = self._song.is_playing
+            
+            # Add record mode state
+            if hasattr(self._song, 'record_mode'):
+                result["record_mode"] = self._song.record_mode
+            
+            # Add current song time
+            if hasattr(self._song, 'current_song_time'):
+                result["current_song_time"] = self._song.current_song_time
+            
+            return result
+        except Exception as e:
+            self.log_message(f"Error getting current view: {str(e)}")
+            self.log_message(traceback.format_exc())
             raise
     
     def _get_track_arrangement_clips(self, track_index):
@@ -2726,23 +3285,59 @@ class AbletonMCPboost(ControlSurface):
     def _show_arrangement_view(self):
         """Switch to arrangement view"""
         try:
-            if hasattr(self._song.view, 'show_view'):
-                self._song.view.show_view('Arranger')
-            # Try alternative approach if show_view isn't available
-            elif hasattr(self._song.view, 'is_view_visible'):
-                # Find available views
-                if hasattr(self._song.view, 'available_main_views'):
-                    views = self._song.view.available_main_views()
-                    self.log_message(f"Available views: {views}")
+            # Try multiple approaches to ensure view changes
+            
+            # First approach: focused_document_view (Live 11)
+            if hasattr(self._song.view, 'focused_document_view'):
+                current_view = self._song.view.focused_document_view
+                self.log_message(f"Current view before switch: {current_view}")
+                
+                if hasattr(self._song.view, 'focus_view'):
+                    # Live 11 method
+                    self._song.view.focus_view('Arranger')
+                    # Wait a moment for the view change to take effect
+                    import time
+                    time.sleep(0.1)
                     
-                    # Try to find arranger
-                    for view_name in views:
-                        if 'arrange' in view_name.lower() or 'arrang' in view_name.lower():
+                    # Verify the view change
+                    if self._song.view.focused_document_view == 'Arranger':
+                        self.log_message("Successfully switched to Arranger view using focus_view")
+                    else:
+                        self.log_message(f"View did not change, still {self._song.view.focused_document_view}")
+                        # Try alternative method
+                        if hasattr(self.application(), 'view'):
+                            self.application().view.focus_view('Arranger')
+                            time.sleep(0.1)
+            
+            # Second approach: show_view (legacy)
+            elif hasattr(self._song.view, 'show_view'):
+                self._song.view.show_view('Arranger')
+                self.log_message("Called show_view('Arranger')")
+            
+            # Third approach: check available views
+            elif hasattr(self._song.view, 'available_main_views'):
+                views = self._song.view.available_main_views()
+                self.log_message(f"Available views: {views}")
+                
+                for view_name in views:
+                    if 'arrange' in view_name.lower() or 'arrang' in view_name.lower():
+                        if hasattr(self._song.view, 'focus_view'):
                             self._song.view.focus_view(view_name)
+                            self.log_message(f"Called focus_view('{view_name}')")
                             break
+            
+            # Verify final state
+            if hasattr(self._song.view, 'focused_document_view'):
+                self.log_message(f"Final view state: {self._song.view.focused_document_view}")
+            
+            # Access current song time to verify we're in arrangement view
+            if hasattr(self._song, 'current_song_time'):
+                current_time = self._song.current_song_time
+                self.log_message(f"Current song time: {current_time}")
                 
             result = {
-                "success": True
+                "success": True,
+                "current_view": self._song.view.focused_document_view if hasattr(self._song.view, 'focused_document_view') else "Unknown"
             }
             return result
         except Exception as e:
@@ -2756,9 +3351,21 @@ class AbletonMCPboost(ControlSurface):
     def _show_session_view(self):
         """Switch to session view"""
         try:
-            if hasattr(self._song.view, 'show_view'):
+            # Primary method for Live 11: focused_document_view
+            if hasattr(self._song.view, 'focused_document_view'):
+                current_view = self._song.view.focused_document_view
+                self.log_message(f"Current view: {current_view}")
+                
+                if current_view != 'Session':
+                    # In Live 11, we use focus_view to change views
+                    if hasattr(self._song.view, 'focus_view'):
+                        self._song.view.focus_view('Session')
+                        self.log_message("Switched to Session view using focus_view")
+            # Fall back to show_view if available (older API versions)
+            elif hasattr(self._song.view, 'show_view'):
                 self._song.view.show_view('Session')
-            # Try alternative approach if show_view isn't available
+                self.log_message("Switched to Session view using show_view")
+            # Try alternative approach if neither method is available
             elif hasattr(self._song.view, 'is_view_visible'):
                 # Find available views
                 if hasattr(self._song.view, 'available_main_views'):
@@ -2769,10 +3376,16 @@ class AbletonMCPboost(ControlSurface):
                     for view_name in views:
                         if 'session' in view_name.lower():
                             self._song.view.focus_view(view_name)
+                            self.log_message(f"Switched to {view_name} view")
                             break
+            
+            # Verify the view has changed
+            if hasattr(self._song.view, 'focused_document_view'):
+                self.log_message(f"View after change: {self._song.view.focused_document_view}")
                 
             result = {
-                "success": True
+                "success": True,
+                "current_view": self._song.view.focused_document_view if hasattr(self._song.view, 'focused_document_view') else "Unknown"
             }
             return result
         except Exception as e:
@@ -2863,4 +3476,157 @@ class AbletonMCPboost(ControlSurface):
                 raise
         except Exception as e:
             self.log_message(f"Error copying arrangement to session: {str(e)}")
+            raise
+
+    def _set_clip_loop_end(self, track_index, clip_start_time, loop_end):
+        """Set the loop end point for a clip in the arrangement view"""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            
+            track = self._song.tracks[track_index]
+            
+            # Find the clip at the specified start time
+            found_clip = None
+            for clip in track.arrangement_clips:
+                clip_start = None
+                
+                # Try different methods to get the clip start time - more robust version
+                try:
+                    if hasattr(clip, 'start_time'):
+                        clip_start = clip.start_time
+                        self.log_message(f"Got start_time directly: {clip_start}")
+                    elif hasattr(clip, 'start_marker'):
+                        # Check if start_marker is a float directly
+                        if isinstance(clip.start_marker, (int, float)):
+                            clip_start = float(clip.start_marker)
+                            self.log_message(f"Start marker is a float/int: {clip_start}")
+                        # Check if start_marker has a time attribute
+                        elif hasattr(clip.start_marker, 'time'):
+                            clip_start = clip.start_marker.time
+                            self.log_message(f"Got start time from marker: {clip_start}")
+                        # Try direct conversion as a fallback
+                        else:
+                            try:
+                                clip_start = float(clip.start_marker)
+                                self.log_message(f"Converted start marker to float: {clip_start}")
+                            except (TypeError, ValueError):
+                                self.log_message("Couldn't determine clip start time")
+                except Exception as e:
+                    self.log_message(f"Error getting clip start time: {str(e)}")
+                
+                if clip_start is None:
+                    self.log_message("Couldn't determine clip start time, skipping")
+                    continue
+                    
+                if abs(clip_start - clip_start_time) < 0.1:
+                    found_clip = clip
+                    break
+            
+            if found_clip is None:
+                raise Exception(f"No clip found at time {clip_start_time}")
+                
+            self.log_message(f"Found clip at position {clip_start_time}, setting loop end to {loop_end}")
+            
+            # Try different methods to set the loop end - more robust version
+            try:
+                # Get the clip's start time for calculations
+                clip_start = 0
+                try:
+                    if hasattr(found_clip, 'start_time'):
+                        clip_start = found_clip.start_time
+                    elif hasattr(found_clip, 'start_marker'):
+                        if isinstance(found_clip.start_marker, (int, float)):
+                            clip_start = float(found_clip.start_marker)
+                        elif hasattr(found_clip.start_marker, 'time'):
+                            clip_start = found_clip.start_marker.time
+                except Exception:
+                    self.log_message("Couldn't determine clip start time, using 0")
+                
+                # Calculate absolute end position if needed
+                absolute_end = clip_start + loop_end
+                self.log_message(f"Absolute end position: {absolute_end}")
+                
+                # Try different approaches to set the end marker/time
+                success = False
+                
+                # Try using end_marker directly
+                if hasattr(found_clip, 'end_marker'):
+                    # Handle different types of end markers
+                    if isinstance(found_clip.end_marker, (int, float)):
+                        # End marker is a direct float value
+                        try:
+                            found_clip.end_marker = float(absolute_end)
+                            self.log_message(f"Set end marker as float to {absolute_end}")
+                            success = True
+                        except Exception as e:
+                            self.log_message(f"Error setting end marker directly: {str(e)}")
+                    elif hasattr(found_clip.end_marker, 'time'):
+                        # End marker has a time attribute
+                        try:
+                            found_clip.end_marker.time = absolute_end
+                            self.log_message(f"Set end marker time to {absolute_end}")
+                            success = True
+                        except Exception as e:
+                            self.log_message(f"Error setting end marker time: {str(e)}")
+                    else:
+                        # Last resort: try direct assignment
+                        try:
+                            found_clip.end_marker = absolute_end
+                            self.log_message(f"Set end marker with direct assignment to {absolute_end}")
+                            success = True
+                        except Exception as e:
+                            self.log_message(f"Error with direct end marker assignment: {str(e)}")
+                
+                # Try loop object approach if end_marker didn't work
+                if not success and hasattr(found_clip, 'loop'):
+                    if hasattr(found_clip.loop, 'end_time'):
+                        try:
+                            # Some versions use relative time from clip start
+                            found_clip.loop.end_time = loop_end
+                            self.log_message(f"Set loop end time to {loop_end}")
+                            success = True
+                        except Exception as e:
+                            self.log_message(f"Error setting loop end time: {str(e)}")
+                    elif hasattr(found_clip.loop, 'end_marker'):
+                        if hasattr(found_clip.loop.end_marker, 'time'):
+                            try:
+                                found_clip.loop.end_marker.time = absolute_end
+                                self.log_message(f"Set loop end marker time to {absolute_end}")
+                                success = True
+                            except Exception as e:
+                                self.log_message(f"Error setting loop end marker time: {str(e)}")
+                
+                # Try direct loop_end property
+                if not success and hasattr(found_clip, 'loop_end'):
+                    try:
+                        # Usually this is relative time in beats
+                        found_clip.loop_end = loop_end
+                        self.log_message(f"Set loop_end to {loop_end}")
+                        success = True
+                    except Exception as e:
+                        self.log_message(f"Error setting loop_end: {str(e)}")
+                
+                if not success:
+                    raise Exception("Could not find a way to set clip loop end point")
+            except Exception as e:
+                self.log_message(f"Error setting loop end: {str(e)}")
+                raise
+            
+            # Check if we were successful
+            clip_length = None
+            if hasattr(found_clip, 'length'):
+                clip_length = found_clip.length
+                self.log_message(f"New clip length: {clip_length}")
+            
+            result = {
+                "track_index": track_index,
+                "clip_start_time": clip_start_time,
+                "loop_end": loop_end,
+                "clip_length": clip_length
+            }
+            return result
+        except Exception as e:
+            self.log_message(f"Error setting clip loop end: {str(e)}")
+            self.log_message(traceback.format_exc())
             raise
